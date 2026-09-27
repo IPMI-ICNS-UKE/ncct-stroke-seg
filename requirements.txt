@@ -1,0 +1,6 @@
+# Versions verified in the project's nnunet_dev environment (Python 3.10.18).
+nnunetv2==2.6.2
+antspyx==0.6.3
+SimpleITK==2.5.2
+numpy==2.2.6
+pandas==2.3.3

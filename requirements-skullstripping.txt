@@ -1,0 +1,2 @@
+# Version verified in the project's separate totalseg environment.
+totalsegmentator==2.11.0

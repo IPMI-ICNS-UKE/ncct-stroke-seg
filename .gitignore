@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+*.nii
+*.nii.gz
+*.npz
+*.npy
+*.pth
+*.pt
+*.h5
+*.mat
+outputs/
+data/
+models/
