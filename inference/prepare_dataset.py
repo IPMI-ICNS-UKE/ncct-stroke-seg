@@ -1,3 +1,5 @@
+"""Copy paired CT channels and labels into the recorded inference layout."""
+
 import argparse
 import shutil
 from pathlib import Path

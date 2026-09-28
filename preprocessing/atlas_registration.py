@@ -1,3 +1,5 @@
+"""Register CTs affinely to the atlas and apply the transform to masks."""
+
 import argparse
 from pathlib import Path
 import shutil

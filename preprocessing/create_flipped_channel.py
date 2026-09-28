@@ -1,15 +1,13 @@
+"""Copy paired CT/mask files and create the left-right mirrored CT channel."""
+
 import argparse
 import SimpleITK as sitk
 import numpy as np
 from pathlib import Path
 import shutil
 
-""""
-function for flipping the brain and generating a corresponding difference map
-    ->requires the atlas aligned stroke ct as image.nii.gz in a patient folder
-"""
-
 def create_difference_map(SOURCE_DIR: Path, TARGET_DIR: Path):
+    """Save `image_flipped.nii.gz`; the computed difference map is not written."""
     print(f"Calculating difference maps from {SOURCE_DIR} to {TARGET_DIR}")
 
     for patient_folder in SOURCE_DIR.iterdir():
@@ -54,14 +52,6 @@ def create_difference_map(SOURCE_DIR: Path, TARGET_DIR: Path):
                 flipped_brain_sitk.SetSpacing(ct_image.GetSpacing())
                 sitk.WriteImage(flipped_brain_sitk, output_dir / "image_flipped.nii.gz")
 
-                """
-                #save difference map
-                difference_map_sitk = sitk.GetImageFromArray(difference_map)
-                difference_map_sitk.SetOrigin(ct_image.GetOrigin())
-                difference_map_sitk.SetDirection(ct_image.GetDirection())
-                difference_map_sitk.SetSpacing(ct_image.GetSpacing())
-                sitk.WriteImage(difference_map_sitk, output_dir / "difference_map.nii.gz")
-                """
             else:
                 print(f"No matching files found in: {patient_folder}")
 

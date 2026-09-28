@@ -1,8 +1,9 @@
+"""Clamp skull-stripped CT intensities to the configured HU interval."""
+
 import argparse
 import SimpleITK as sitk
 from pathlib import Path
 
-#function to resample data to given voxel spacing, expects ct in "image.nii.gz" format
 def hu_clipping(SOURCE_DIR: Path, TARGET_DIR: Path, range_lower: int = 0, range_upper: int = 100):
     print(f"Starting hu clipping of {SOURCE_DIR} to {TARGET_DIR}")
 
@@ -33,23 +34,6 @@ def hu_clipping(SOURCE_DIR: Path, TARGET_DIR: Path, range_lower: int = 0, range_
 
             else:
                 print(f"No matching files found in: {patient_folder}")
-
-    """"
-    for segmentation_file in SOURCE_DIR.iterdir():
-        if segmentation_file.suffix == ".gz":
-            print(f"Found valid CT in: {segmentation_file}")
-
-
-            #read image
-            ct_image = sitk.ReadImage(str(segmentation_file))
-
-            #clip image
-            ct_image_clipped = sitk.Clamp(ct_image, lowerBound=range_lower, upperBound=range_upper)
-
-
-            #write clipped ct
-            sitk.WriteImage(ct_image_clipped, str(segmentation_file))
-    """
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Clamp CT to the recorded 0–80 HU range.")

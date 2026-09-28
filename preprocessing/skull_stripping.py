@@ -1,3 +1,5 @@
+"""Use TotalSegmentator's brain mask to strip CTs and paired lesion masks."""
+
 import argparse
 import subprocess
 import SimpleITK as sitk

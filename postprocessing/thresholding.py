@@ -1,3 +1,8 @@
+"""Convert saved class-probability maps to masks using a fixed threshold.
+
+Evaluation is separate; the nnU-Net mask supplies spatial metadata only.
+"""
+
 import argparse
 from pathlib import Path
 import numpy as np
@@ -5,38 +10,35 @@ import SimpleITK as sitk
 
 
 def thresholding(SOURCE_DIR: Path, TARGET_DIR: Path, threshold: float, class_index: int, largestCC: bool = True):
+    """Write binary masks, optionally retaining only the largest component."""
     for softmax_path in SOURCE_DIR.iterdir():
         if softmax_path.suffix == ".npz":
             print(f"Found softmax file {softmax_path}")
-            reference_nifti = softmax_path.parent / (softmax_path.stem + ".nii.gz")  #reference image for header information
+            reference_nifti = softmax_path.parent / (softmax_path.stem + ".nii.gz")
 
 
             out_folder = TARGET_DIR
             out_folder.mkdir(exist_ok=True)
 
-            #load softmax file
             npz = np.load(softmax_path)
             softmax = npz["softmax"] if "softmax" in npz else npz["probabilities"]
 
             prob = softmax[class_index]    # (Z, Y, X)
 
-            #thresholding
             binary = (prob >= threshold).astype(np.uint8)
 
 
-            #create segmentation
             ref_img = sitk.ReadImage(str(reference_nifti))
             segmentation = sitk.GetImageFromArray(binary)
 
             if(largestCC):
-                #LargestCC
                 cc = sitk.ConnectedComponent(segmentation)
                 stats = sitk.LabelShapeStatisticsImageFilter()
                 stats.Execute(cc)
 
                 labels = stats.GetLabels()
 
-                if labels:  # es gibt mindestens eine Komponente
+                if labels:
                     largest_label = max(labels, key=lambda l: stats.GetNumberOfPixels(l))
                     segmentation = sitk.BinaryThreshold(
                         cc,
@@ -48,7 +50,6 @@ def thresholding(SOURCE_DIR: Path, TARGET_DIR: Path, threshold: float, class_ind
                 else:
                     print("No largest label!")
 
-            #save segmentation
             segmentation.CopyInformation(ref_img)
             out_name = f"{softmax_path.stem}.nii.gz"
             out_path = out_folder / out_name
