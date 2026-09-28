@@ -18,7 +18,7 @@ The study used fixed thresholds of 0.05 (Boston) and 0.03 (ISLES). NWU is downst
 - `inference/`: input preparation and nnU-Net prediction.
 - `postprocessing/`: apply a selected probability threshold to prediction maps.
 - `evaluation/`: standalone nnU-Net and recorded segmentation-metric evaluation.
-- `nnunet_extension/`: unchanged frozen-encoder trainer plus its configurable subclass.
+- `nnunet_extension/`: one configurable frozen-encoder trainer and its installer.
 - `splits/isles2024_finetune_test.json`: the study's 75/74 ISLES subject split, provided for reference only; no script reads it.
 
 ## Requirements
@@ -36,7 +36,7 @@ python -m inference.prepare_dataset --source /path/to/preprocessed \
   --target /path/to/nnunet_inputs --dataset-name Study --label-filename mask.nii.gz
 ```
 
-The source cases must contain `image.nii.gz` and `mask.nii.gz`; work and output directories must be separate and empty. Preprocessing and inference default to GPU; use `--device cpu` for a CPU-only system. Install the custom trainer into the active nnU-Net environment once:
+The source cases must contain `image.nii.gz` and `mask.nii.gz`; work and output directories must be separate and empty. Preprocessing and inference default to GPU; use `--device cpu` for a CPU-only system. Install the custom trainer into a clean nnU-Net 2.6.2 environment once:
 
 ```bash
 python -m nnunet_extension.install_trainer
@@ -71,4 +71,4 @@ If you use the segmentation workflow, cite the associated stroke CT segmentation
 
 ## License
 
-Original repository material uses [CC BY-NC 4.0](LICENSE), matching aNWU. The copied nnU-Net trainer retains its separate [Apache 2.0 license](nnunet_extension/LICENSE.nnunet); external data and weights are not covered.
+Repository code, documentation, and split listing use [CC BY-NC 4.0](LICENSE), matching aNWU. nnU-Net is an external dependency under its own license; external data and weights are not covered.
