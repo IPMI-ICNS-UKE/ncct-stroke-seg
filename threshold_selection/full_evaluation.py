@@ -3,9 +3,6 @@ import SimpleITK as sitk
 from pathlib import Path
 import numpy as np
 
-import numpy as np
-import SimpleITK as sitk
-
 def calculate_hd95(pred_img: sitk.Image, gt_img: sitk.Image) -> float:
     """
     Symmetric 95% Hausdorff Distance (HD95) between two binary segmentations.
@@ -51,7 +48,6 @@ def full_evaluation(SOURCE_DIR: Path, GT_DIR: Path):
     dice_scores = []
     iou_scores = []
     FP_scores = []
-    aisd_scores = []
     hd95_scores = []
 
     for prediction_file in SOURCE_DIR.iterdir():
@@ -90,19 +86,9 @@ def full_evaluation(SOURCE_DIR: Path, GT_DIR: Path):
             hd95 = calculate_hd95(pred_img, gt_img)
             hd95_scores.append(hd95)
 
-            #AISD evaluation
-            VAL_IDS_STR = "0073410, 0072723, 0226290, 0537908, 0538058, 0091415, 0538780, 0073540, 0226188, 0226258, 0226314, 0091507, 0226298, 0538975, 0226257, 0226142, 0072681, 0091538, 0538983, 0537961, 0091646, 0072765, 0226137, 0091621, 0091458, 0021822, 0538319, 0226133, 0091657, 0537925, 0073489, 0538502, 0091476, 0226136, 0538532, 0073312, 0539025, 0226309, 0226307, 0091383, 0021092, 0537990, 0226299, 0073060, 0538505, 0073424, 0091534, 0226125, 0072691, 0538425, 0226199, 0226261"
-            val_ids = {v.strip() for v in VAL_IDS_STR.split(",") if v.strip()}
-
-            is_val = any(str(val_id) in str(prediction_file) for val_id in val_ids)
-            if(is_val):
-                aisd_scores.append(dice_score)
-
             print(f"  -> DICE for {prediction_file.name}: {dice_score:.4f}")
             print(f"  -> IoU for {prediction_file.name}: {iou_score:.4f}")
             print(f"  -> HD95 for {prediction_file.name}: {hd95:.2f}")
-        else:
-            print(f"Found no valid data in {SOURCE_DIR} (skipping {prediction_file})")
 
     if len(dice_scores) == 0:
         print("No DICE scores were computed (no matching .gz files).")
@@ -137,12 +123,8 @@ def full_evaluation(SOURCE_DIR: Path, GT_DIR: Path):
     print(f"mAP: {mAP:.4f}")
     print(f"HD_accuracy: {HD_accuracy:.4f}")
     print(f"Mean FP: {mean_FP:.4f}")
-    print(f"Mean HD95 (finite only): {float(np.mean(finite_hd95)):.2f}")
-    print(f"Median HD95 (finite only): {float(np.median(finite_hd95)):.2f}")
-
-    #aisd eval
-    print(f"Number of evaluated AISD cases: {len(aisd_scores)}")
-    print(f"Mean  AISD_val-DICE: {(np.mean(aisd_scores)):.4f}")
+    print(f"Mean HD95 (finite only): {float(np.mean(finite_hd95)) if finite_hd95 else float('nan'):.2f}")
+    print(f"Median HD95 (finite only): {float(np.median(finite_hd95)) if finite_hd95 else float('nan'):.2f}")
 
     return mean_dice, median_dice, HD_accuracy, mean_FP, mAP
 

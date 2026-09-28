@@ -21,7 +21,8 @@ def run_prediction(model_dataset: int,
                    config: str,
                    trainer: str,
                    plan: str,
-                   labels: str
+                   labels: str,
+                   device: str = "cuda",
                 ):
     if config not in ["2d", "3d_fullres", "3d_lowres", "3d_cascade_fullres"]:
         raise ValueError(f"Invalid config: {config}. Must be one of '2d', '3d_fullres', '3d_lowres', '3d_cascade_fullres'.")
@@ -48,9 +49,10 @@ def run_prediction(model_dataset: int,
         "-c", config,
         "-p", plan,
         "-tr", trainer,
-        #"-chk", "checkpoint_best.pth",
+        "-chk", "checkpoint_final.pth",
         "--save_probabilities",     #option for saving softmax output
-        "-f", *fold_args
+        "-f", *fold_args,
+        "-device", device,
     ], check=True)
 
     run_evaluation(output_folder, gt_folder, labels)
@@ -67,8 +69,9 @@ if __name__ == "__main__":
     parser.add_argument("--config", default="3d_fullres")
     parser.add_argument("--trainer", required=True)
     parser.add_argument("--plan", default="nnUNetResEncUNetMPlans")
+    parser.add_argument("--device", choices=("cuda", "cpu", "mps"), default="cuda")
     args = parser.parse_args()
     run_prediction(
         args.dataset, tuple(args.folds), args.input, args.output, args.labels,
-        args.config, args.trainer, args.plan, "1",
+        args.config, args.trainer, args.plan, "1", args.device,
     )

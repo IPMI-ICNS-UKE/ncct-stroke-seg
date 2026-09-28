@@ -1,47 +1,60 @@
-# Stroke CT segmentation pipeline
+# Stroke CT segmentation
 
-This repository collects the project's recorded CT preprocessing, ISLES fine-tuning, probability-threshold search, and nnU-Net v2 inference code. It preserves the existing operations and parameters; the source mapping is in [SOURCES.md](SOURCES.md).
+Code for atlas-aligned, dual-channel nnU-Net segmentation of ischemic lesions on non-contrast CT, including frozen-encoder fine-tuning and probability-threshold selection. The modules adapt the existing research scripts; their provenance is listed in [SOURCES.md](SOURCES.md).
 
-## Workflow
+## Overview
 
-1. Convert paired CT and lesion masks to RPI using the matching recorded orientation variant: Boston RAI→RPI, UKE RAI→RPI with origin reset, or ISLES LPI→RPI. The UKE and ISLES variants write in place.
-2. Register both to the 3-mm NCCT atlas using ANTs affine registration. CT uses linear interpolation, zero background, and values below 1 are set to zero; masks use nearest-neighbor interpolation and remain binary.
-3. Segment the brain with TotalSegmentator, erode the brain mask with radius `(0, 1, 1)`, fill holes, then apply it to CT and lesion mask.
-4. Clamp CT intensities to **0–80 HU**. The original stage writes only `image.nii.gz`; run it in place if the paired mask must remain in the same case directory.
-5. Create `image_flipped.nii.gz` by flipping the CT array along its X axis. Copy both CT channels and the mask into nnU-Net's `_0000`/`_0001` input format.
-6. Fine-tune the five folds of datasets 036 and 037 from the corresponding Dataset023 `checkpoint_best.pth` weights, make complementary out-of-fold predictions, and select the threshold with highest mean Dice. The recorded search tries `.5, .4, .3, .2, .1, .09, .08, .07, .06, .05, .04, .03, .02, .01`; it saves a run only when the selected threshold is in `[.02, .04)`.
-7. Run nnU-Net inference with five-fold prediction, saved probabilities, and the recorded evaluation helper.
+1. Register CT and mask to a 1 × 1 × 3 mm³ atlas with ANTs affine registration (linear CT and nearest-neighbor mask interpolation), skull-strip with TotalSegmentator, and clip CT to 0–80 HU.
+2. Create a left–right mirrored CT as the second input channel. Train the five-fold baseline with nnU-Net, or supply its five fold checkpoints for fine-tuning.
+3. Fine-tune the five models with the encoder frozen. The study used 10 epochs for Boston and 30 for ISLES, 60 training iterations per epoch, and a learning rate of 0.001; these values are arguments, not cohort-specific code defaults.
+4. Use two complementary fine-tuning-validation datasets to assess candidate thresholds. The reusable search script selects by mean Dice. For held-out inference, average the five models' probability maps from `checkpoint_final.pth` and apply a fixed threshold.
 
-## Layout
+The study used fixed thresholds of 0.05 (Boston) and 0.03 (ISLES). NWU is downstream of segmentation: calculate it on native, unclipped CT after mapping masks back to native space. The NWU method and code are available separately in [Sentker et al.'s aNWU repository](https://github.com/IPMI-ICNS-UKE/aNWU).
 
-`preprocessing/` holds the image and mask stages; `finetuning/` holds the training and threshold-search orchestration; `threshold_selection/` holds probability thresholding and metrics; `inference/` holds nnU-Net input preparation and prediction; `nnunet_extension/` holds the unchanged custom trainer; `configs/` contains the verified dataset metadata and 3D nnU-Net plans for datasets 036 and 037.
+## Structure
 
-## Requirements and resources
+- `preprocessing/`: one pipeline command for registration, skull stripping, HU clipping, and the mirrored channel; individual stages remain available.
+- `finetuning/`: configurable training and two-way threshold search.
+- `threshold_selection/`, `inference/`: probability thresholding, evaluation, input preparation, and nnU-Net prediction.
+- `nnunet_extension/`: unchanged frozen-encoder trainer plus its configurable subclass.
+- `splits/isles2024_finetune_test.json`: the study's 75/74 ISLES subject split, provided for reference only; no script reads it.
 
-Python 3.10.18 and the package versions in `requirements.txt` were verified in `nnunet_dev`. Skull stripping requires the `TotalSegmentator` executable and its brain-model weights on a GPU; `requirements-skullstripping.txt` records version 2.11.0 from the separate `totalseg` environment. The scripts expect an external `ncct_skull_3mm.nii.gz` atlas, the original two-channel nnU-Net datasets and `splits_final.json` files, and pretrained Dataset023 fold checkpoints. These images, splits, and weights are not included.
+## Requirements
 
-Install the included trainer into the active nnU-Net 2.6.2 environment once with `python -m nnunet_extension.install_trainer`. It refuses to overwrite a different existing trainer. Set `nnUNet_raw`, `nnUNet_preprocessed`, and `nnUNet_results` to the corresponding nnU-Net data roots before training or inference. `NNUNET_WORKSPACE` is the parent directory of those three roots and the `nnUNet_predict` directory used by the threshold search.
+Python 3.10.18 and the verified packages in `requirements.txt`, including nnU-Net 2.6.2. Skull stripping also needs TotalSegmentator and its brain weights (see `requirements-skullstripping.txt`). Supply the external CT atlas, prepared two-channel nnU-Net datasets with their own `dataset.json`, plans, and `splits_final.json`, and five baseline fold checkpoints. nnU-Net creates dataset-specific plans during preparation; this repository does not ship the private-cohort plans or images. Set `nnUNet_raw`, `nnUNet_preprocessed`, and `nnUNet_results` in the environment. Input CT/mask spatial headers must be valid; an explicit RPI conversion is not required before atlas registration.
 
-## Examples
+## Usage
 
-Run these commands from the repository root, substituting your data paths:
-
-```bash
-python -m preprocessing.rpi_conversion --source /path/rai_cases --target /path/rpi_cases
-python -m preprocessing.atlas_registration --source /path/rpi_cases --target /path/registered --atlas /path/ncct_skull_3mm.nii.gz --with-masks
-python -m preprocessing.skull_stripping --source /path/registered --target /path/stripped --with-masks
-python -m preprocessing.hu_clipping --source /path/stripped --target /path/stripped
-python -m preprocessing.create_flipped_channel --source /path/stripped --target /path/two_channel_cases
-python -m inference.prepare_dataset --source /path/two_channel_cases --target /path/nnUNet_predict --dataset-name Study --label-filename mask.nii.gz
-```
+Run modules from the repository root. For labeled cases, the preprocessing entry point runs the four image stages in order, keeping intermediate registrations and transforms in `--work`:
 
 ```bash
-export NNUNET_WORKSPACE=/path/to/nnUNet_dev
-export nnUNet_raw="$NNUNET_WORKSPACE/nnUNet_raw"
-export nnUNet_preprocessed="$NNUNET_WORKSPACE/nnUNet_preprocessed"
-export nnUNet_results="$NNUNET_WORKSPACE/nnUNet_results"
-python -m finetuning.threshold_search --iterations 1
-python -m inference.nnunet_predict --dataset 36 --input /path/imagesVal --output /path/predictions --labels /path/labelsVal --trainer nnUNetTrainer_freeze_test
+python -m preprocessing.pipeline --source /path/to/cases --work /path/to/work \
+  --output /path/to/preprocessed --atlas /path/to/ncct_skull_3mm.nii.gz
+python -m inference.prepare_dataset --source /path/to/preprocessed \
+  --target /path/to/nnunet_inputs --dataset-name Study --label-filename mask.nii.gz
 ```
 
-The inference helper follows the original labeled-cohort workflow and evaluates its predictions against `--labels`. The nnU-Net CLI uses its default `checkpoint_final.pth` here because the recorded helper does not pass `-chk`. The threshold-search evaluation also retains its original empty-mask and missing-case handling; these choices should be reported when using its scores. The exact raw-data construction script for datasets 036/037 was not identifiable and remains an external reproducibility dependency.
+The source cases must contain `image.nii.gz` and `mask.nii.gz`; work and output directories must be separate and empty. Preprocessing and inference default to GPU; use `--device cpu` for a CPU-only system. Install the custom trainer into the active nnU-Net environment once:
+
+```bash
+python -m nnunet_extension.install_trainer
+```
+
+For threshold calibration, prepare two nnU-Net datasets with complementary validation splits and a shared folder of two-channel images and labels. Then, for example:
+
+```bash
+python -m finetuning.threshold_search --dataset-a 124 --dataset-b 125 \
+  --images /path/to/images --labels /path/to/labels \
+  --pretrained-model /path/to/baseline_model --output /path/to/calibration \
+  --epochs 30 --train-iterations 60 --learning-rate 0.001
+```
+
+To fine-tune a final model on your own prepared training dataset, use `python -m finetuning.train --dataset 126 --pretrained-model /path/to/baseline_model --epochs 30`. Keep the held-out test set out of training and validation. For inference, use `python -m inference.nnunet_predict --dataset 126 --input /path/to/images --output /path/to/predictions --labels /path/to/labels --trainer nnUNetTrainer_freeze_configurable`, followed by `python -m threshold_selection.thresholding --probabilities /path/to/predictions/nnUNetTrainer_freeze_configurable_3d_fullres --output /path/to/masks --labels /path/to/labels --threshold 0.03` (substitute your selected threshold).
+
+## Citation
+
+If you use the segmentation workflow, cite the associated stroke CT segmentation paper. For NWU computation, cite [Sentker et al., *European Radiology* (2025)](https://doi.org/10.1007/s00330-025-12238-0) and refer to [aNWU](https://github.com/IPMI-ICNS-UKE/aNWU).
+
+## License
+
+Original repository material uses [CC BY-NC 4.0](LICENSE), matching aNWU. The copied nnU-Net trainer retains its separate [Apache 2.0 license](nnunet_extension/LICENSE.nnunet); external data and weights are not covered.

@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 
 #function for skull stripping of a dataset
-def skull_stripping(SOURCE_DIR: Path, TARGET_DIR: Path, convert_masks: bool = False):
+def skull_stripping(SOURCE_DIR: Path, TARGET_DIR: Path, convert_masks: bool = False, device: str = "gpu"):
     print(f"Starting skull stripping of{SOURCE_DIR} to {TARGET_DIR}")
 
     for patient_folder in SOURCE_DIR.iterdir():
@@ -33,7 +33,7 @@ def skull_stripping(SOURCE_DIR: Path, TARGET_DIR: Path, convert_masks: bool = Fa
                     "TotalSegmentator",
                     "-i", ct_image_path,
                     "-o", totalSeg_folder,
-                    "--device", "gpu",
+                    "--device", device,
                     "--roi_subset_robust", "brain",
                     "-rc"
                 ], check=True)
@@ -71,5 +71,6 @@ if __name__ == "__main__":
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--target", type=Path, required=True)
     parser.add_argument("--with-masks", action="store_true")
+    parser.add_argument("--device", choices=("gpu", "cpu", "mps"), default="gpu")
     args = parser.parse_args()
-    skull_stripping(args.source, args.target, convert_masks=args.with_masks)
+    skull_stripping(args.source, args.target, convert_masks=args.with_masks, device=args.device)
