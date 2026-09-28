@@ -1,6 +1,6 @@
 # Stroke CT segmentation
 
-Code for atlas-aligned, dual-channel nnU-Net segmentation of ischemic lesions on non-contrast CT, including frozen-encoder fine-tuning and probability-threshold selection. The modules adapt the existing research scripts; their provenance is listed in [SOURCES.md](SOURCES.md).
+Code for atlas-aligned, dual-channel nnU-Net segmentation of ischemic lesions on non-contrast CT, including frozen-encoder fine-tuning and probability-threshold selection.
 
 ## Overview
 
