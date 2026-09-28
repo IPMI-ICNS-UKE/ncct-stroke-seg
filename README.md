@@ -93,7 +93,7 @@ python -m evaluation.full_evaluation --predictions /path/to/masks \
   --labels /path/to/nnunet_inputs/Dataset_Study/labelsVal
 ```
 
-`evaluation.nnunet_evaluate` also exposes the recorded `nnUNetv2_evaluate_simple` command. NWU is downstream of segmentation: map masks back to native space and calculate it on native, unclipped CT using the method in [Sentker et al.'s aNWU repository](https://github.com/IPMI-ICNS-UKE/aNWU).
+NWU is downstream of segmentation: map masks back to native space and calculate it on native, unclipped CT using the method in [Sentker et al.'s aNWU repository](https://github.com/IPMI-ICNS-UKE/aNWU).
 
 ## Repository layout
 
