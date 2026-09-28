@@ -4,7 +4,7 @@ Code for atlas-aligned, dual-channel nnU-Net segmentation of ischemic lesions on
 
 ## Requirements
 
-Use Python 3.10.18 with the verified packages in `requirements.txt`, including nnU-Net 2.6.2. Skull stripping also needs TotalSegmentator and its brain weights (see `requirements-skullstripping.txt`). You need a CT atlas, images and masks, and five baseline fold checkpoints. Prepare your own nnU-Net datasets with `dataset.json`, plans, and `splits_final.json`. Private-cohort data and plans are not included. Set `nnUNet_raw`, `nnUNet_preprocessed`, and `nnUNet_results` in your environment.
+Use Python 3.10.18 with the verified packages in `requirements.txt`, including nnU-Net 2.6.2. Skull stripping also needs TotalSegmentator and its brain weights (see `requirements-skullstripping.txt`). Supply a CT atlas, images and masks, and five baseline fold checkpoints. Set `nnUNet_raw`, `nnUNet_preprocessed`, and `nnUNet_results` in your environment. Private-cohort data, model weights, and nnU-Net plans are not included.
 
 ## Workflow
 
@@ -23,7 +23,7 @@ Each labeled source case needs `image.nii.gz` and `mask.nii.gz`. The work and ou
 
 ### 2. Prepare nnU-Net data and baseline models
 
-Train the five-fold baseline with nnU-Net, or supply its `fold_0`–`fold_4` `checkpoint_best.pth` files. For target-domain fine-tuning, prepare three two-channel nnU-Net datasets from the preprocessed CT, mirrored CT, and mask. Give the fine-tuning cases the same nnU-Net case IDs in all three datasets. The datasets have different IDs and splits. Generate plans with nnU-Net. Keep test cases out of all three datasets.
+Train a five-fold baseline with nnU-Net, or supply its `fold_0`–`fold_4` `checkpoint_best.pth` files. Prepare three target-domain nnU-Net datasets from the preprocessed CT, mirrored CT, and mask. Each dataset needs its own ID, `dataset.json`, and nnU-Net plans, but the same fine-tuning cases with the same case IDs. Do not include held-out test cases.
 
 The split helper reads exact case IDs from a `labelsTr` folder containing **only fine-tuning cases**. It writes five identical folds for each of the three datasets:
 
@@ -34,37 +34,38 @@ python -m finetuning.prepare_splits --labels /path/to/finetuning_only/labelsTr \
 
 | Example dataset | Generated split | Train cases per fold | Validation cases per fold |
 |---|---|---|---|
-| Final model (126) | `final/splits_final.json` | All fine-tuning cases | The same fine-tuning cases |
 | Calibration A (124) | `calibration_a/splits_final.json` | Half A | Half B |
 | Calibration B (125) | `calibration_b/splits_final.json` | Half B | Half A |
+| Final model (126) | `final/splits_final.json` | All fine-tuning cases | The same fine-tuning cases |
 
 Place each file in the matching prepared dataset's nnU-Net preprocessed directory. To reproduce a fixed calibration split, supply `--calibration-a-cases` with one exact case ID per line instead of `--seed`. The helper only writes split files. It does not copy images or generate plans.
 
-### 3. Fine-tune the final model
+### 3. Fine-tune calibration models and select a threshold
 
-Install the frozen-encoder trainer into a clean nnU-Net 2.6.2 environment once. Then fine-tune five folds on the final dataset, where every fold trains on the full fine-tuning cohort:
+Install the frozen-encoder trainer into your nnU-Net 2.6.2 environment once. The calibration command fine-tunes five folds on each dataset, averages their predictions on the excluded validation half, then combines both halves to select the threshold with the highest mean Dice. Use the shared fine-tuning images and labels for `--images` and `--labels`:
 
 ```bash
 python -m nnunet_extension.install_trainer
+python -m finetuning.threshold_search --dataset-a 124 --dataset-b 125 \
+  --images /path/to/finetuning_only/imagesTr \
+  --labels /path/to/finetuning_only/labelsTr \
+  --pretrained-model /path/to/baseline_model --output /path/to/calibration \
+  --epochs 30 --train-iterations 60 --learning-rate 0.001
+```
+
+The study used 10 fine-tuning epochs for Boston and 30 for ISLES, with 60 training iterations per epoch and a learning rate of 0.001. Set these through the command arguments for your cohort. The default threshold grid is 0.50, 0.40, 0.30, 0.20, then 0.10–0.01 in 0.01 steps. Results are saved as `threshold_evaluation.csv` beneath `--output`. The study selected 0.05 for Boston and 0.03 for ISLES. The ISLES fine-tuning/test split is provided in `splits/isles2024_finetune_test.json` for reference. The code does not enforce it.
+
+### 4. Fine-tune the final model
+
+Fine-tune five folds on the final dataset, using all fine-tuning cases for training in every fold. Each fold starts from its corresponding baseline `checkpoint_best.pth`. The encoder stays frozen while the remaining weights are fine-tuned:
+
+```bash
 python -m finetuning.train --dataset 126 \
   --pretrained-model /path/to/baseline_model --epochs 30 \
   --train-iterations 60 --learning-rate 0.001
 ```
 
-Each fold starts from its corresponding baseline `checkpoint_best.pth`. The encoder stays frozen while the remaining weights are fine-tuned. The resulting `checkpoint_final.pth` files are used for held-out prediction. The study used 10 fine-tuning epochs for Boston and 30 for ISLES, with 60 training iterations per epoch and a learning rate of 0.001. Set these through the command arguments for your cohort.
-
-### 4. Select the probability threshold
-
-Use the two calibration datasets for threshold selection. The search fine-tunes five models per dataset, averages their predictions on that dataset's excluded validation half, then pools both halves to choose the threshold with the highest mean Dice. Point `--images` and `--labels` to the shared fine-tuning images and labels, not to test cases:
-
-```bash
-python -m finetuning.threshold_search --dataset-a 124 --dataset-b 125 \
-  --images /path/to/images --labels /path/to/labels \
-  --pretrained-model /path/to/baseline_model --output /path/to/calibration \
-  --epochs 30 --train-iterations 60 --learning-rate 0.001
-```
-
-The default threshold grid is 0.50, 0.40, 0.30, 0.20, then 0.10–0.01 in 0.01 steps. Results are saved as `threshold_evaluation.csv` beneath `--output`. The study selected 0.05 for Boston and 0.03 for ISLES. The ISLES fine-tuning/test split is provided in `splits/isles2024_finetune_test.json` for reference. The code does not enforce it.
+The final split lists the fine-tuning cases for validation too. It contains no test cases and is not used to choose a checkpoint. Use the resulting `checkpoint_final.pth` files for held-out prediction.
 
 ### 5. Predict held-out cases
 
