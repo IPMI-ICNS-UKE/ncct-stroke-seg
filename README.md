@@ -4,7 +4,7 @@ Code for atlas-aligned, dual-channel nnU-Net segmentation of ischemic lesions on
 
 ## Overview
 
-1. Register CT and mask to a 1 × 1 × 3 mm³ atlas with ANTs affine registration (linear CT and nearest-neighbor mask interpolation), skull-strip with TotalSegmentator, and clip CT to 0–80 HU.
+1. Register CT and mask to a 1 × 1 × 3 mm³ atlas with affine registration (linear CT and nearest-neighbor mask interpolation), skull-strip with TotalSegmentator, and clip CT to 0–80 HU.
 2. Create a left–right mirrored CT as the second input channel. Train the five-fold baseline with nnU-Net, or supply its five fold checkpoints for fine-tuning.
 3. Fine-tune the five models with the encoder frozen. The study used 10 epochs for Boston and 30 for ISLES, 60 training iterations per epoch, and a learning rate of 0.001; these values are arguments, not cohort-specific code defaults.
 4. Use two complementary fine-tuning-validation datasets to assess candidate thresholds. The reusable search script selects by mean Dice. For held-out inference, average the five models' probability maps from `checkpoint_final.pth` and apply a fixed threshold.
