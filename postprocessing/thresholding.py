@@ -2,22 +2,9 @@ import argparse
 from pathlib import Path
 import numpy as np
 import SimpleITK as sitk
-import subprocess
 
 
-def run_evaluation(prediction_folder: Path, gt_folder: Path, labels: str):
-    print(f"Starting evaluation of predictions in {prediction_folder} against ground truth in {gt_folder}")
-
-    subprocess.run([
-        "nnUNetv2_evaluate_simple",
-        str(gt_folder),
-        str(prediction_folder),
-        "-l", labels,
-        "--chill"
-    ], check=True)
-
-
-def thresholding(SOURCE_DIR: Path, TARGET_DIR: Path, GT_FOLDER: Path, threshold: float, class_index: int, largestCC: bool = True):
+def thresholding(SOURCE_DIR: Path, TARGET_DIR: Path, threshold: float, class_index: int, largestCC: bool = True):
     for softmax_path in SOURCE_DIR.iterdir():
         if softmax_path.suffix == ".npz":
             print(f"Found softmax file {softmax_path}")
@@ -70,13 +57,10 @@ def thresholding(SOURCE_DIR: Path, TARGET_DIR: Path, GT_FOLDER: Path, threshold:
             print("Finished!")
             print("Written to:", out_path)
 
-    run_evaluation(TARGET_DIR, GT_FOLDER, "1")
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Apply a selected probability threshold.")
     parser.add_argument("--probabilities", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--labels", type=Path, required=True)
     parser.add_argument("--threshold", type=float, required=True)
     args = parser.parse_args()
-    thresholding(args.probabilities, args.output, args.labels, args.threshold, 1, False)
+    thresholding(args.probabilities, args.output, args.threshold, 1, False)

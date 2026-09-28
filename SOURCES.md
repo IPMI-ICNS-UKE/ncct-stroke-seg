@@ -11,9 +11,10 @@ The repository adapts existing files from `nnUNet_Segmentation`; originals remai
 | `preprocessing/hu_clipping.py` | `nwu_project/preprocessing_pipeline/hu_clipping.py` |
 | `preprocessing/create_flipped_channel.py` | `nwu_project/preprocessing_pipeline/create_difference_map.py` |
 | `inference/prepare_dataset.py` | `nwu_project/dataset_creation/create_inference_dataset.py` |
-| `inference/nnunet_predict.py` | `nwu_project/evaluation/nnUNet_predict.py` (now explicitly requests the same default `checkpoint_final.pth`) |
-| `threshold_selection/thresholding.py` | `nwu_project/postprocessing_pipeline/thresholding.py` |
-| `threshold_selection/full_evaluation.py` | `nwu_project/evaluation/full_evaluation.py` (unused AISD-only output removed; scoring unchanged) |
+| `inference/nnunet_predict.py` | `nwu_project/evaluation/nnUNet_predict.py` (now explicitly requests the same default `checkpoint_final.pth`; evaluation is separate) |
+| `postprocessing/thresholding.py` | `nwu_project/postprocessing_pipeline/thresholding.py` (evaluation call extracted; thresholding unchanged) |
+| `evaluation/full_evaluation.py` | `nwu_project/evaluation/full_evaluation.py` (unused AISD-only output removed; scoring unchanged) |
+| `evaluation/nnunet_evaluate.py` | `nnUNetv2_evaluate_simple` invocation extracted from the original prediction and thresholding scripts |
 | `finetuning/threshold_search.py` | `thresholding_full.py`, with paths/dataset IDs exposed and threshold selected by mean Dice without its repeated expected-range gate |
 | `nnunet_extension/nnUNetTrainer_freeze_test.py` | `nnUNet/nnunetv2/training/nnUNetTrainer/variants/training_length/nnUNetTrainer_freeze_test.py` (exact copy) |
 

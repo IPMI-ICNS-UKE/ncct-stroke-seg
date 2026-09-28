@@ -7,7 +7,7 @@ Code for atlas-aligned, dual-channel nnU-Net segmentation of ischemic lesions on
 1. Register CT and mask to a 1 × 1 × 3 mm³ atlas with affine registration (linear CT and nearest-neighbor mask interpolation), skull-strip with TotalSegmentator, and clip CT to 0–80 HU.
 2. Create a left–right mirrored CT as the second input channel. Train the five-fold baseline with nnU-Net, or supply its five fold checkpoints for fine-tuning.
 3. Fine-tune the five models with the encoder frozen. The study used 10 epochs for Boston and 30 for ISLES, 60 training iterations per epoch, and a learning rate of 0.001; these values are arguments, not cohort-specific code defaults.
-4. Use two complementary fine-tuning-validation datasets to assess candidate thresholds. The reusable search script selects by mean Dice. For held-out inference, average the five models' probability maps from `checkpoint_final.pth` and apply a fixed threshold.
+4. Use two complementary fine-tuning-validation datasets to assess candidate thresholds. The reusable search script selects by mean Dice. For held-out inference, average the five models' probability maps from `checkpoint_final.pth`, apply a fixed threshold, and evaluate separately.
 
 The study used fixed thresholds of 0.05 (Boston) and 0.03 (ISLES). NWU is downstream of segmentation: calculate it on native, unclipped CT after mapping masks back to native space. The NWU method and code are available separately in [Sentker et al.'s aNWU repository](https://github.com/IPMI-ICNS-UKE/aNWU).
 
@@ -15,7 +15,9 @@ The study used fixed thresholds of 0.05 (Boston) and 0.03 (ISLES). NWU is downst
 
 - `preprocessing/`: one pipeline command for registration, skull stripping, HU clipping, and the mirrored channel; individual stages remain available.
 - `finetuning/`: configurable training and two-way threshold search.
-- `threshold_selection/`, `inference/`: probability thresholding, evaluation, input preparation, and nnU-Net prediction.
+- `inference/`: input preparation and nnU-Net prediction.
+- `postprocessing/`: apply a selected probability threshold to prediction maps.
+- `evaluation/`: standalone nnU-Net and recorded segmentation-metric evaluation.
 - `nnunet_extension/`: unchanged frozen-encoder trainer plus its configurable subclass.
 - `splits/isles2024_finetune_test.json`: the study's 75/74 ISLES subject split, provided for reference only; no script reads it.
 
@@ -40,7 +42,7 @@ The source cases must contain `image.nii.gz` and `mask.nii.gz`; work and output 
 python -m nnunet_extension.install_trainer
 ```
 
-For threshold calibration, prepare two nnU-Net datasets with complementary validation splits and a shared folder of two-channel images and labels. Then, for example:
+For threshold calibration, prepare two nnU-Net datasets containing only the fine-tuning cohort, with complementary validation splits and a shared folder of two-channel images and labels. Then, for example:
 
 ```bash
 python -m finetuning.threshold_search --dataset-a 124 --dataset-b 125 \
@@ -49,7 +51,19 @@ python -m finetuning.threshold_search --dataset-a 124 --dataset-b 125 \
   --epochs 30 --train-iterations 60 --learning-rate 0.001
 ```
 
-To fine-tune a final model on your own prepared training dataset, use `python -m finetuning.train --dataset 126 --pretrained-model /path/to/baseline_model --epochs 30`. Keep the held-out test set out of training and validation. For inference, use `python -m inference.nnunet_predict --dataset 126 --input /path/to/images --output /path/to/predictions --labels /path/to/labels --trainer nnUNetTrainer_freeze_configurable`, followed by `python -m threshold_selection.thresholding --probabilities /path/to/predictions/nnUNetTrainer_freeze_configurable_3d_fullres --output /path/to/masks --labels /path/to/labels --threshold 0.03` (substitute your selected threshold).
+To fine-tune a final model on your own prepared training dataset, use `python -m finetuning.train --dataset 126 --pretrained-model /path/to/baseline_model --epochs 30`. Keep the held-out test set out of training and threshold calibration; the reference ISLES split is not enforced by code. Prediction, threshold application, and optional evaluation are separate commands:
+
+```bash
+python -m inference.nnunet_predict --dataset 126 --input /path/to/images \
+  --output /path/to/predictions --trainer nnUNetTrainer_freeze_configurable
+python -m postprocessing.thresholding \
+  --probabilities /path/to/predictions/nnUNetTrainer_freeze_configurable_3d_fullres \
+  --output /path/to/masks --threshold 0.03
+python -m evaluation.full_evaluation --predictions /path/to/masks \
+  --labels /path/to/test_labels
+```
+
+Substitute the threshold selected on the fine-tuning cohort. `evaluation.nnunet_evaluate` separately exposes the recorded `nnUNetv2_evaluate_simple` command when needed.
 
 ## Citation
 

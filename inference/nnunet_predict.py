@@ -2,26 +2,13 @@ import argparse
 from pathlib import Path
 import subprocess
 
-def run_evaluation(prediction_folder: Path, gt_folder: Path, labels: str):
-    print(f"Starting evaluation of predictions in {prediction_folder} against ground truth in {gt_folder}")
-
-    subprocess.run([
-        "nnUNetv2_evaluate_simple",
-        str(gt_folder),
-        str(prediction_folder),
-        "-l", labels,
-        "--chill"
-    ], check=True)
-
 def run_prediction(model_dataset: int,
                    fold: tuple,
                    input_folder: Path,
                    output_folder: Path,
-                   gt_folder: Path,
                    config: str,
                    trainer: str,
                    plan: str,
-                   labels: str,
                    device: str = "cuda",
                 ):
     if config not in ["2d", "3d_fullres", "3d_lowres", "3d_cascade_fullres"]:
@@ -55,16 +42,13 @@ def run_prediction(model_dataset: int,
         "-device", device,
     ], check=True)
 
-    run_evaluation(output_folder, gt_folder, labels)
-
-    print("Prediction and evaluation finished!")
+    print("Prediction finished!")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Predict and evaluate with nnU-Net v2.")
+    parser = argparse.ArgumentParser(description="Predict with nnU-Net v2.")
     parser.add_argument("--dataset", type=int, required=True)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--labels", type=Path, required=True)
     parser.add_argument("--folds", nargs="+", default=["0", "1", "2", "3", "4"])
     parser.add_argument("--config", default="3d_fullres")
     parser.add_argument("--trainer", required=True)
@@ -72,6 +56,6 @@ if __name__ == "__main__":
     parser.add_argument("--device", choices=("cuda", "cpu", "mps"), default="cuda")
     args = parser.parse_args()
     run_prediction(
-        args.dataset, tuple(args.folds), args.input, args.output, args.labels,
-        args.config, args.trainer, args.plan, "1", args.device,
+        args.dataset, tuple(args.folds), args.input, args.output,
+        args.config, args.trainer, args.plan, args.device,
     )

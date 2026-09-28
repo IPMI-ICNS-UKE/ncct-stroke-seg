@@ -1,3 +1,5 @@
+"""Compute the recorded segmentation metrics against reference masks."""
+
 import argparse
 import SimpleITK as sitk
 from pathlib import Path

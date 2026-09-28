@@ -9,7 +9,9 @@ import pandas as pd
 
 from finetuning.train import CONFIGURATION, FOLDS, PLAN, TRAINER, run_finetuning
 from inference import nnunet_predict
-from threshold_selection import full_evaluation, thresholding
+from evaluation import full_evaluation
+from evaluation.nnunet_evaluate import run_evaluation
+from postprocessing import thresholding
 
 
 THRESHOLDS = (.5, .4, .3, .2, .1, .09, .08, .07, .06, .05, .04, .03, .02, .01)
@@ -69,10 +71,11 @@ def predict(datasets, case_groups, inputs, outputs, oof: Path, labels: Path):
     oof_sources = []
     for dataset, cases, input_folder, output in zip(datasets, case_groups, inputs, outputs):
         nnunet_predict.run_prediction(
-            dataset, FOLDS, input_folder, output, labels,
-            CONFIGURATION, TRAINER, PLAN, "1",
+            dataset, FOLDS, input_folder, output,
+            CONFIGURATION, TRAINER, PLAN,
         )
         folder = output / f"{TRAINER}_{CONFIGURATION}"
+        run_evaluation(folder, labels)
         required = [folder / f"{case}{suffix}" for case in cases
                     for suffix in (".nii.gz", ".npz")]
         if any(not path.is_file() for path in required):
@@ -87,7 +90,8 @@ def predict(datasets, case_groups, inputs, outputs, oof: Path, labels: Path):
 def optimize_threshold(oof: Path, masks: Path, labels: Path, thresholds):
     rows = []
     for value in thresholds:
-        thresholding.thresholding(oof, masks, labels, value, 1, False)
+        thresholding.thresholding(oof, masks, value, 1, False)
+        run_evaluation(masks, labels)
         metrics = full_evaluation.full_evaluation(masks, labels)
         if metrics is None:
             raise RuntimeError(f"No cases evaluated at threshold {value}")
@@ -99,7 +103,8 @@ def optimize_threshold(oof: Path, masks: Path, labels: Path, thresholds):
     # First maximum retains the recorded threshold-grid tie rule.
     best = table.loc[table.mean_dice.idxmax()]
     threshold = float(best["threshold"])
-    thresholding.thresholding(oof, masks, labels, threshold, 1, False)
+    thresholding.thresholding(oof, masks, threshold, 1, False)
+    run_evaluation(masks, labels)
     print(f"Selected threshold: {threshold:g} | mean Dice: {best.mean_dice:.6f}")
     return threshold
 
