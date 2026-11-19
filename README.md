@@ -56,7 +56,7 @@ For fixed internal splits, place the nnU-Net `splits_final.json` in the preproce
 
 Models are saved under `$nnUNet_results/Dataset001_Stroke/nnUNetTrainerSymmetryComparison__SymmetryResEncMPlans__3d_fullres/fold_{0–4,all}/checkpoint_final.pth`. Add `--resume` to continue an interrupted fold from `checkpoint_latest.pth`. The custom trainer runs directly from this repository; no installed nnU-Net files are edited.
 
-### 3. Select fine-tuning duration
+### 3. Fine-tune on all adaptation cases
 
 Prepare a separate dataset containing **only adaptation cases**, using the same source normalization and geometry. In the commands below, `BASELINE` is the source `fold_all/checkpoint_final.pth` path:
 
@@ -65,17 +65,6 @@ export BASELINE=/path/to/source_model/fold_all/checkpoint_final.pth
 python -m inference.prepare_dataset --source /path/to/adaptation_prepared \
   --target "$nnUNet_raw" --dataset-name Dataset002_Target --training
 python -m training.prepare --dataset Dataset002_Target --source-checkpoint "$BASELINE"
-python -m finetuning.prepare_splits --labels "$nnUNet_raw/Dataset002_Target/labelsTr" \
-  --output "$nnUNet_preprocessed/Dataset002_Target/splits_final.json" --seed 12345
-python -m finetuning.select_duration --dataset Dataset002_Target \
-  --source-checkpoint "$BASELINE" --output /path/to/duration_cv --epochs 5 10 15 20
-```
-
-Two complementary folds each start from the same source model. Candidate snapshots share the same constant learning rates, so one training trajectory per fold supplies all durations. Selection uses pooled out-of-fold median Dice; ties favor shorter adaptation. Per-case scores, duration summaries, predictions, and checkpoints are saved under `--output`. Change the duration grid for the target domain. To reuse a fixed split, supply `--calibration-a-cases /path/to/case_ids.txt` instead of `--seed`.
-
-### 4. Fine-tune on all adaptation cases
-
-```bash
 python -m finetuning.train --dataset Dataset002_Target \
   --source-checkpoint "$BASELINE" --epochs 10
 ```
@@ -84,7 +73,9 @@ The study settings are 10 epochs for Boston and 40 for ISLES, with 20 updates pe
 
 The ISLES adaptation/test case lists are in `splits/isles2024_finetune_test.json`; dataset preparation does not automatically apply this listing.
 
-### 5. Predict and evaluate
+**Optional two-fold CV:** To select adaptation duration for your own cohort, use `finetuning.prepare_splits` and `finetuning.select_duration` (see each command's `--help`). Selection compares candidate durations using pooled out-of-fold median Dice on adaptation cases only. This step is not required when using the study settings above.
+
+### 4. Predict and evaluate
 
 Prepare held-out CTs using step 1, create inference channels, and predict with either the source or adapted checkpoint:
 
