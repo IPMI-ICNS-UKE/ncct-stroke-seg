@@ -97,7 +97,7 @@ python -m evaluation.full_evaluation --predictions /path/to/predictions \
 
 Inference uses one model with Gaussian sliding-window averaging, mirror augmentation, and threshold 0.5. Use `--save-probabilities` to retain probabilities or `--device cpu` for CPU inference. Evaluation saves per-case CSV and summary JSON with Dice, IQR, LDR (Dice > 0), the study's mAP definition (case fraction with IoU > 0.35355), and HD95. Predictions and references must have matching cases and grids.
 
-For downstream NWU, map masks back to native space and calculate on native, unclipped CT using [aNWU](https://github.com/IPMI-ICNS-UKE/aNWU), including its connected-component handling.
+For downstream NWU, map masks back to native space and calculate on native, unclipped CT using [aNWU](https://github.com/IPMI-ICNS-UKE/aNWU).
 
 ## Citation
 
