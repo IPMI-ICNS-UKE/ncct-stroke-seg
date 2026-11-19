@@ -99,9 +99,7 @@ Inference uses one model with Gaussian sliding-window averaging, mirror augmenta
 
 For downstream NWU, map masks back to native space and calculate on native, unclipped CT using [aNWU](https://github.com/IPMI-ICNS-UKE/aNWU), including its connected-component handling.
 
-## Code and citation
-
-`nnunet_extension/model.py` implements the shared encoder and comparison modules. `augmentation.py` applies paired CT intensity augmentation while preserving support masks. `trainer.py` and `optimizers.py` define source training and selective adaptation.
+## Citation
 
 Cite the associated stroke CT segmentation paper when using this pipeline, alongside [nnU-Net](https://github.com/MIC-DKFZ/nnUNet) and [nnFoundation](https://github.com/MIC-DKFZ/nnssl). For NWU, cite [Sentker et al., *European Radiology* (2025)](https://doi.org/10.1007/s00330-025-12238-0).
 
