@@ -1,10 +1,12 @@
 # Stroke CT segmentation
 
-nnU-Net segmentation of ischemic lesions on non-contrast CT, initialized with nnFoundationCNN. Original and mirrored CT share a ResEncM encoder. Local comparison modules enhance two encoder skip maps; two image-derived support channels exclude invalid comparisons. The pipeline includes source training, selective domain fine-tuning, and evaluation at a fixed probability threshold of 0.5.
+This repository provides an nnU-Net pipeline for segmenting ischemic lesions on non-contrast CT. It combines nnFoundationCNN initialization with explicit comparison of the two brain hemispheres.
+
+The original CT and its mirrored version pass through a shared ResEncM encoder. Local comparison modules match nearby contralateral features and add this information to two decoder skip connections. Two image-derived support masks restrict comparison to valid image regions. The workflow covers preprocessing, source training, selective fine-tuning for a new domain, and evaluation at a fixed probability threshold of 0.5.
 
 ## Requirements
 
-Use Python 3.10 and a CUDA GPU supporting bfloat16 (the study used 16 GB VRAM). Create a separate environment and install the pinned nnU-Net revision and dependencies:
+Use Python 3.10 and a CUDA GPU supporting bfloat16 (16 GB VRAM in the study). Create an environment and install the pinned dependencies:
 
 ```bash
 python3.10 -m venv .venv
@@ -17,30 +19,34 @@ export nnUNet_results=/path/to/nnUNet_results
 export nnUNet_compile=true
 ```
 
-Skull stripping needs TotalSegmentator's brain weights. Supply a CT atlas at 1 × 1 × 3 mm³, CT images, and lesion annotations. Private data and trained study models are not included. Download the encoder checkpoint from the official [nnFoundationCNN repository](https://huggingface.co/MIC-DKFZ/nnFoundationCNN); it is not redistributed here:
+Preprocessing requires TotalSegmentator's brain weights and a CT atlas at 1 × 1 × 3 mm³. Download the encoder checkpoint from the official [nnFoundationCNN repository](https://huggingface.co/MIC-DKFZ/nnFoundationCNN):
 
 ```bash
-python -c "from huggingface_hub import hf_hub_download; hf_hub_download('MIC-DKFZ/nnFoundationCNN', 'checkpoint_final.pth', revision='8edba046f01d09771b8204b9d3e7a6c06d6e1adc', local_dir='/path/to/nnfoundation')"
+python - <<'PY'
+from huggingface_hub import hf_hub_download
+hf_hub_download('MIC-DKFZ/nnFoundationCNN', 'checkpoint_final.pth',
+    revision='8edba046f01d09771b8204b9d3e7a6c06d6e1adc', local_dir='/path/to/nnfoundation')
+PY
 ```
 
 ## Workflow
 
-Run commands from the repository root. Replace the example paths and dataset names with your own. Commands refuse to overwrite completed models or populated output directories.
+Run commands from the repository root and replace example paths and dataset names with your own.
 
 ### 1. Preprocess CTs and masks
 
-Each source case is a folder containing `image.nii.gz` and, for labeled cohorts, `mask.nii.gz`. The pipeline applies affine atlas registration (linear CT, nearest-neighbor mask interpolation), TotalSegmentator skull stripping, 0–80 HU clipping, and left-right mirroring. Use an atlas whose stored x axis is left-right. Intermediate images and transforms remain in `--work`:
+Each case folder contains `image.nii.gz` and, for labeled data, `mask.nii.gz`. Preprocessing applies affine atlas registration (linear CT and nearest-neighbor mask interpolation), skull stripping, 0–80 HU clipping, and left-right mirroring. The atlas's stored x axis must be left-right.
 
 ```bash
 python -m preprocessing.pipeline --source /path/to/source_cases --work /path/to/work \
   --output /path/to/source_prepared --atlas /path/to/ncct_skull_3mm.nii.gz
 ```
 
-Source, work, and output folders must be separate; work and output must be empty. Unlabeled inference cohorts are supported. Preprocessing defaults to GPU; use `--device cpu` if needed. Apply the same preprocessing to source, adaptation, and held-out cohorts. Already atlas-aligned data can enter the subsequent individual preprocessing stages directly.
+Use separate source, work, and output folders, with work and output initially empty. Intermediate images and transforms remain in `--work`. Apply the same preprocessing to source, adaptation, and held-out data. Already atlas-aligned CTs can enter the individual subsequent stages directly. GPU processing is the default, with `--device cpu` available.
 
 ### 2. Prepare source data and train
 
-Create four channels: CT, mirrored CT, and their binary support masks (`CT > 0`, without using lesion labels). The supplied plan fixes 1 × 1 × 3 mm³ spacing, a 48 × 160 × 160 voxel patch, batch size 2, and the study's source CT normalization statistics. Both CT channels share CT normalization; support masks are not normalized.
+Dataset preparation creates CT, mirrored CT, and two binary support channels (`CT > 0`). The supplied plan uses 1 × 1 × 3 mm³ spacing, a 48 × 160 × 160 voxel patch, batch size 2, and fixed source CT normalization statistics shared by both CT channels. Support masks remain unnormalized.
 
 ```bash
 python -m inference.prepare_dataset --source /path/to/source_prepared \
@@ -52,13 +58,13 @@ python -m training.train --dataset Dataset001_Stroke \
   --foundation /path/to/nnfoundation/checkpoint_final.pth --folds all
 ```
 
-For fixed internal splits, place the nnU-Net `splits_final.json` in the preprocessed dataset folder before training. Otherwise nnU-Net generates five folds. CV folds are validated after training; `fold_all` fits one model on the entire source cohort for external use. Source training uses 100 epochs × 250 updates, AdamW, encoder LR 1e-4 and decoder/comparison LR 1e-3, with 38 warmup epochs followed by polynomial decay. The official nnU-Net dynamic transfer adapts pretrained kernels to the anisotropic plan.
+Place an existing `splits_final.json` in the preprocessed dataset folder to reuse fixed CV splits. Otherwise nnU-Net generates five folds. Each CV fold is validated after training, and `fold_all` trains the final model on the full source cohort. Training uses 100 epochs × 250 updates, AdamW, encoder LR 1e-4 and decoder/comparison LR 1e-3, with 38 warmup epochs followed by polynomial decay. Official nnU-Net dynamic transfer adapts the pretrained kernels to the anisotropic plan.
 
-Models are saved under `$nnUNet_results/Dataset001_Stroke/nnUNetTrainerSymmetryComparison__SymmetryResEncMPlans__3d_fullres/fold_{0–4,all}/checkpoint_final.pth`. Add `--resume` to continue an interrupted fold from `checkpoint_latest.pth`. The custom trainer runs directly from this repository; no installed nnU-Net files are edited.
+Final checkpoints are saved under `$nnUNet_results/Dataset001_Stroke/nnUNetTrainerSymmetryComparison__SymmetryResEncMPlans__3d_fullres/fold_{0–4,all}/checkpoint_final.pth`. Use `--resume` to continue an interrupted fold. The trainer runs directly from this repository.
 
-### 3. Fine-tune on all adaptation cases
+### 3. Fine-tune on adaptation cases
 
-Prepare a separate dataset containing **only adaptation cases**, using the same source normalization and geometry. In the commands below, `BASELINE` is the source `fold_all/checkpoint_final.pth` path:
+Prepare a dataset containing **only labeled adaptation cases**. `BASELINE` points to the source `fold_all/checkpoint_final.pth`, whose normalization and geometry are reused. The example uses the ISLES settings:
 
 ```bash
 export BASELINE=/path/to/source_model/fold_all/checkpoint_final.pth
@@ -66,18 +72,19 @@ python -m inference.prepare_dataset --source /path/to/adaptation_prepared \
   --target "$nnUNet_raw" --dataset-name Dataset002_Target --training
 python -m training.prepare --dataset Dataset002_Target --source-checkpoint "$BASELINE"
 python -m finetuning.train --dataset Dataset002_Target \
-  --source-checkpoint "$BASELINE" --epochs 10
+  --source-checkpoint "$BASELINE" --epochs 40 --iterations 20 \
+  --main-lr 1e-3 --norm-lr 5e-4
 ```
 
-The study settings are 10 epochs for Boston and 40 for ISLES, with 20 updates per epoch. Only comparison modules, the final decoder stage/segmentation head (LR 1e-3), and early encoder normalization affine parameters (LR 5e-4) adapt; all other parameters remain frozen. Set durations, iterations, or LRs through the corresponding command options. The final checkpoint is saved under `$nnUNet_results/Dataset002_Target/nnUNetTrainerSymmetryFineTuning__SymmetryResEncMPlans__3d_fullres/fold_all/`. Validation on this all-case refit is not used for checkpoint selection. Held-out test cases must remain outside this dataset.
+Comparison modules and the final decoder stage/segmentation head adapt at `--main-lr`. Early encoder normalization affine parameters adapt at `--norm-lr`. Remaining parameters stay frozen. Epochs, updates per epoch, and both LRs are configurable. The final checkpoint is saved under `$nnUNet_results/Dataset002_Target/nnUNetTrainerSymmetryFineTuning__SymmetryResEncMPlans__3d_fullres/fold_all/`.
 
-The ISLES adaptation/test case lists are in `splits/isles2024_finetune_test.json`; dataset preparation does not automatically apply this listing.
+Keep held-out cases separate. The ISLES adaptation/test lists are provided in `splits/isles2024_finetune_test.json` and must be applied when assembling the datasets.
 
-**Optional two-fold CV:** To select adaptation duration for your own cohort, use `finetuning.prepare_splits` and `finetuning.select_duration` (see each command's `--help`). Selection compares candidate durations using pooled out-of-fold median Dice on adaptation cases only. This step is not required when using the study settings above.
+**Optional two-fold CV:** Use `finetuning.prepare_splits` and `finetuning.select_duration` to compare adaptation durations by pooled out-of-fold median Dice (see `--help`). This is optional when using the settings above.
 
 ### 4. Predict and evaluate
 
-Prepare held-out CTs using step 1, create inference channels, and predict with either the source or adapted checkpoint:
+Preprocess held-out CTs as in step 1, then predict with the source or adapted checkpoint:
 
 ```bash
 python -m inference.prepare_dataset --source /path/to/heldout_prepared \
@@ -88,13 +95,13 @@ python -m evaluation.full_evaluation --predictions /path/to/predictions \
   --labels /path/to/inference_inputs/Heldout/labelsVal --output /path/to/metrics
 ```
 
-Inference uses Gaussian sliding-window averaging and mirror augmentation with one final model. Binary output uses probability 0.5, without threshold optimization or connected-component filtering. Add `--save-probabilities` to retain probabilities, or `--device cpu` for CPU inference. Evaluation saves per-case CSV and summary JSON, including Dice, IQR, LDR (Dice > 0), the study's mAP definition (case fraction with IoU > 0.35355), and HD95. Prediction and reference folders must contain the same cases and grids.
+Inference uses one model with Gaussian sliding-window averaging, mirror augmentation, and threshold 0.5. Use `--save-probabilities` to retain probabilities or `--device cpu` for CPU inference. Evaluation saves per-case CSV and summary JSON with Dice, IQR, LDR (Dice > 0), the study's mAP definition (case fraction with IoU > 0.35355), and HD95. Predictions and references must have matching cases and grids.
 
-NWU is downstream of segmentation: map masks back to native space and calculate it on native, unclipped CT using [aNWU](https://github.com/IPMI-ICNS-UKE/aNWU), including its connected-component handling.
+For downstream NWU, map masks back to native space and calculate on native, unclipped CT using [aNWU](https://github.com/IPMI-ICNS-UKE/aNWU), including its connected-component handling.
 
 ## Code and citation
 
-`nnunet_extension/model.py` contains the comparison modules and shared encoder; `augmentation.py` keeps CT intensity augmentation paired and support masks intact. `trainer.py` and `optimizers.py` define source training and selective adaptation. The remaining folders follow the workflow above.
+`nnunet_extension/model.py` implements the shared encoder and comparison modules. `augmentation.py` applies paired CT intensity augmentation while preserving support masks. `trainer.py` and `optimizers.py` define source training and selective adaptation.
 
 Cite the associated stroke CT segmentation paper when using this pipeline, alongside [nnU-Net](https://github.com/MIC-DKFZ/nnUNet) and [nnFoundation](https://github.com/MIC-DKFZ/nnssl). For NWU, cite [Sentker et al., *European Radiology* (2025)](https://doi.org/10.1007/s00330-025-12238-0).
 
