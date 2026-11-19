@@ -1,5 +1,8 @@
-# Versions verified in the project's nnunet_dev environment (Python 3.10.18).
-nnunetv2==2.6.2
+# Python 3.10; the nnU-Net revision used by the study.
+nnunetv2 @ git+https://github.com/MIC-DKFZ/nnUNet.git@2edf34680698d3ee62f5e72f3707082d44fb2db0
+torch==2.8.0
+dynamic-network-architectures==0.4.4
+huggingface_hub==0.35.3
 antspyx==0.6.3
 SimpleITK==2.5.2
 numpy==2.2.6

@@ -1,11 +1,9 @@
-"""Create complementary calibration splits and a final all-fine-tuning split."""
+"""Create complementary two-fold splits within the fine-tuning cohort."""
 
 import argparse
 import json
 import random
 from pathlib import Path
-
-from finetuning.train import FOLDS
 
 
 def case_ids(labels: Path) -> list[str]:
@@ -33,23 +31,18 @@ def calibration_half(cases: list[str], seed: int | None, case_file: Path | None)
 
 
 def write_splits(output: Path, cases: list[str], half_a: set[str]) -> None:
-    """Write five identical entries per dataset, as expected by the trainer."""
+    """One prepared target dataset serves both CV halves and the all-case refit."""
     if output.exists():
-        raise FileExistsError(f"Output already exists: {output}")
+        raise FileExistsError(output)
     all_cases = set(cases)
     if not half_a or not half_a < all_cases:
-        raise ValueError("Calibration A must be a nonempty proper subset of fine-tuning cases")
-    half_b = all_cases - half_a
-    for name, train, val in (
-        ("calibration_a", half_a, half_b),
-        ("calibration_b", half_b, half_a),
-        ("final", all_cases, all_cases),
-    ):
-        destination = output / name
-        destination.mkdir(parents=True)
-        folds = [{"train": sorted(train), "val": sorted(val)} for _ in FOLDS]
-        (destination / "splits_final.json").write_text(json.dumps(folds, indent=2) + "\n")
-        print(f"{name}: {len(train)} train, {len(val)} val -> {destination / 'splits_final.json'}")
+        raise ValueError("Calibration A must be a nonempty proper subset")
+    half_b = all_cases-half_a
+    splits = [dict(train=sorted(half_a), val=sorted(half_b)),
+              dict(train=sorted(half_b), val=sorted(half_a))]
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(splits, indent=2)+"\n")
+    print(f"Two-fold CV: {len(half_a)}/{len(half_b)} complementary cases -> {output}")
 
 
 def main() -> None:
@@ -57,7 +50,7 @@ def main() -> None:
     parser.add_argument("--labels", type=Path, required=True,
                         help="labelsTr containing only fine-tuning cases")
     parser.add_argument("--output", type=Path, required=True,
-                        help="New directory for three splits_final.json files")
+                        help="Path to the target dataset's new splits_final.json file")
     choice = parser.add_mutually_exclusive_group(required=True)
     choice.add_argument("--seed", type=int, help="Seed for an approximately equal random split")
     choice.add_argument("--calibration-a-cases", type=Path,

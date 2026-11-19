@@ -14,27 +14,30 @@ def run(source: Path, work: Path, output: Path, atlas: Path, device: str = "gpu"
     if any(path.exists() and any(path.iterdir()) for path in (work, output)):
         raise FileExistsError("Work and output directories must be empty")
     cases = [path for path in source.iterdir() if path.is_dir()]
-    if not cases or any(not (case / name).is_file()
-                        for case in cases for name in ("image.nii.gz", "mask.nii.gz")):
-        raise ValueError("Every source case needs image.nii.gz and mask.nii.gz")
+    if not cases or any(not (case / "image.nii.gz").is_file() for case in cases):
+        raise ValueError("Every source case needs image.nii.gz")
+    mask_flags = [(case / "mask.nii.gz").is_file() for case in cases]
+    if any(mask_flags) and not all(mask_flags):
+        raise ValueError("Supply masks for every case or for none of them")
+    with_masks = all(mask_flags)
 
     from .atlas_registration import atlas_registration
-    from .create_flipped_channel import create_difference_map
+    from .create_flipped_channel import create_flipped_channel
     from .hu_clipping import hu_clipping
     from .skull_stripping import skull_stripping
 
     registered = work / "registered"
     stripped = work / "skull_stripped"
-    atlas_registration(source, registered, atlas, convert_masks=True)
-    skull_stripping(registered, stripped, convert_masks=True, device=device)
+    atlas_registration(source, registered, atlas, convert_masks=with_masks)
+    skull_stripping(registered, stripped, convert_masks=with_masks, device=device)
     hu_clipping(stripped, stripped, range_lower=0, range_upper=80)
-    create_difference_map(stripped, output)
+    create_flipped_channel(stripped, output)
     print(f"Preprocessed {len(cases)} cases to {output}; transforms remain in {registered}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, required=True, help="Case folders with image.nii.gz and mask.nii.gz")
+    parser.add_argument("--source", type=Path, required=True, help="Case folders with image.nii.gz and optional mask.nii.gz")
     parser.add_argument("--work", type=Path, required=True, help="New directory for intermediate images and transforms")
     parser.add_argument("--output", type=Path, required=True, help="New directory for paired CT, mask, and mirrored CT")
     parser.add_argument("--atlas", type=Path, required=True)

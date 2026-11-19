@@ -1,63 +1,78 @@
-"""Ensemble selected nnU-Net folds using final checkpoints and save probabilities."""
+"""Predict with a single full-cohort or adapted symmetry-comparison checkpoint."""
 
 import argparse
 from pathlib import Path
-import subprocess
+import os
+import torch
+from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
+from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
+from nnunet_extension.model import build_network
 
-def run_prediction(model_dataset: int,
-                   fold: tuple,
-                   input_folder: Path,
-                   output_folder: Path,
-                   config: str,
-                   trainer: str,
-                   plan: str,
-                   device: str = "cuda",
-                ):
-    if config not in ["2d", "3d_fullres", "3d_lowres", "3d_cascade_fullres"]:
-        raise ValueError(f"Invalid config: {config}. Must be one of '2d', '3d_fullres', '3d_lowres', '3d_cascade_fullres'.")
-    if plan not in ["nnUNetResEncUNetMPlans", "nnUNetPlans", "FineTuningPlan"]:
-        raise ValueError(f"Invalid plan: {plan}. Must be one of 'nnUNetResEncUNetMPlans', 'nnUNetPlans'.")
 
-    print(f"Running prediction with model {model_dataset}, fold {fold}, on folder {input_folder}")
+def load_model(checkpoint, device='cpu'):
+    saved = torch.load(checkpoint, map_location='cpu', mmap=True, weights_only=False)
+    args = saved['init_args']
+    pm = PlansManager(args['plans'])
+    cm = pm.get_configuration(args['configuration'])
+    dataset = args['dataset_json']
+    if len(dataset['channel_names']) != 4:
+        raise ValueError('Expected a four-channel comparison checkpoint')
+    network = build_network(pm, cm, 4, pm.get_label_manager(dataset).num_segmentation_heads, False)
+    network.load_state_dict(saved['network_weights'], strict=True)
+    return network.eval().to(device), saved, pm, dataset
 
-    #Creation of output folder path
-    identifier = trainer + "_" + config
 
-    output_folder = output_folder / identifier
-    output_folder.mkdir(parents=True, exist_ok=True)
-
-    if isinstance(fold, str):
-        fold_args = [fold]
+def predict(checkpoint, input_folder, output_folder, device='cuda', save_probabilities=False, workers=2, cases=None):
+    input_folder, output_folder = Path(input_folder), Path(output_folder)
+    if not input_folder.is_dir():
+        raise NotADirectoryError(input_folder)
+    if output_folder.exists() and any(output_folder.iterdir()):
+        raise FileExistsError(f'Use an empty prediction directory: {output_folder}')
+    if workers < 1:
+        raise ValueError('workers must be positive')
+    torch.set_num_threads(1)
+    if device.startswith('cuda'):
+        if not torch.cuda.is_available():
+            raise RuntimeError('CUDA unavailable; use --device cpu for CPU prediction')
+        torch.set_autocast_dtype('cuda', torch.bfloat16)
+    network, saved, pm, dataset = load_model(checkpoint, device)
+    predictor = nnUNetPredictor(tile_step_size=.5, use_gaussian=True, use_mirroring=True,
+        perform_everything_on_device=device.startswith('cuda'), device=torch.device(device), allow_tqdm=False)
+    # Keep inference eager without changing compilation for subsequent training.
+    previous_compile = os.environ.get('nnUNet_compile')
+    os.environ['nnUNet_compile'] = 'false'
+    try:
+        predictor.manual_initialization(network, pm, pm.get_configuration(saved['init_args']['configuration']),
+            [saved['network_weights']], dataset, 'nnUNetTrainerSymmetryComparison',
+            saved.get('inference_allowed_mirroring_axes'))
+    finally:
+        if previous_compile is None:
+            os.environ.pop('nnUNet_compile', None)
+        else:
+            os.environ['nnUNet_compile'] = previous_compile
+    inputs = str(input_folder) if cases is None else [
+        [str(input_folder/f'{case}_{i:04d}.nii.gz') for i in range(4)] for case in cases]
+    if workers == 1:
+        output_folder.mkdir(parents=True, exist_ok=True)
+        predictor.predict_from_files_sequential(inputs, str(output_folder),
+            save_probabilities=save_probabilities, overwrite=False)
     else:
-        fold_args = list(fold)
-    subprocess.run([
-        "nnUNetv2_predict",
-        "-i", str(input_folder),
-        "-o", str(output_folder),
-        "-d", str(model_dataset),
-        "-c", config,
-        "-p", plan,
-        "-tr", trainer,
-        "-chk", "checkpoint_final.pth",
-        "--save_probabilities",     #option for saving softmax output
-        "-f", *fold_args,
-        "-device", device,
-    ], check=True)
+        predictor.predict_from_files(inputs, str(output_folder), save_probabilities=save_probabilities,
+            overwrite=False, num_processes_preprocessing=workers, num_processes_segmentation_export=workers)
+    return output_folder
 
-    print("Prediction finished!")
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Predict with nnU-Net v2.")
-    parser.add_argument("--dataset", type=int, required=True)
-    parser.add_argument("--input", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--folds", nargs="+", default=["0", "1", "2", "3", "4"])
-    parser.add_argument("--config", default="3d_fullres")
-    parser.add_argument("--trainer", required=True)
-    parser.add_argument("--plan", default="nnUNetResEncUNetMPlans")
-    parser.add_argument("--device", choices=("cuda", "cpu", "mps"), default="cuda")
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--checkpoint', type=Path, required=True)
+    parser.add_argument('--input', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--device', default='cuda', choices=('cuda', 'cpu'))
+    parser.add_argument('--workers', type=int, default=2)
+    parser.add_argument('--save-probabilities', action='store_true')
     args = parser.parse_args()
-    run_prediction(
-        args.dataset, tuple(args.folds), args.input, args.output,
-        args.config, args.trainer, args.plan, args.device,
-    )
+    predict(args.checkpoint, args.input, args.output, args.device, args.save_probabilities, args.workers)
+
+
+if __name__ == '__main__':
+    main()

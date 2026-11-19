@@ -1,84 +1,73 @@
-"""Copy paired CT channels and labels into the recorded inference layout."""
+"""Create four-channel nnU-Net training or inference data from prepared CT pairs."""
 
 import argparse
-import shutil
+import json
 from pathlib import Path
+import shutil
+import numpy as np
+import SimpleITK as sitk
 
-# script for creating an inference dataset in the nnUNetv2 format
-# this script also creates a directory for the corresponding labels
-# for running the nnUNetv2_evaluate_folder command afterwards
 
-# config of file system
-parser = argparse.ArgumentParser(description="Copy paired CT channels into nnU-Net inference format.")
-parser.add_argument("--source", type=Path, required=True)
-parser.add_argument("--target", type=Path, required=True)
-parser.add_argument("--dataset-name", required=True)
-parser.add_argument("--label-filename", default="dwi_core_mask.nii.gz")
-args = parser.parse_args()
-SOURCE_DIR = args.source
-TARGET_DIR = args.target
+def prepare(source, target, dataset_name, training=False, label_filename='mask.nii.gz'):
+    source, target = Path(source).resolve(), Path(target).resolve()
+    if target == source or source in target.parents or target in source.parents:
+        raise ValueError('Source and target must be separate directories')
+    if Path(dataset_name).name != dataset_name:
+        raise ValueError('Dataset name must be a folder name')
+    destination = target/dataset_name
+    if destination.exists():
+        raise FileExistsError(destination)
+    cases = sorted(p for p in source.iterdir() if p.is_dir() and (p/'image.nii.gz').is_file())
+    if not cases:
+        raise ValueError('No prepared case folders found')
+    # Check required files first. Folder names are the case IDs.
+    for case in cases:
+        if not (case/'image_flipped.nii.gz').is_file() or (training and not (case/label_filename).is_file()):
+            raise FileNotFoundError(f'Missing CT pair or training label: {case}')
+    images = destination/('imagesTr' if training else 'imagesVal')
+    labels = destination/('labelsTr' if training else 'labelsVal')
+    images.mkdir(parents=True)
+    labels.mkdir()
+    for case in cases:
+        native = sitk.ReadImage(str(case/'image.nii.gz'))
+        mirrored = sitk.ReadImage(str(case/'image_flipped.nii.gz'))
+        if (native.GetSize(), native.GetSpacing(), native.GetDirection(), native.GetOrigin()) != (
+                mirrored.GetSize(), mirrored.GetSpacing(), mirrored.GetDirection(), mirrored.GetOrigin()):
+            raise ValueError(f'CT pair geometry differs: {case}')
+        if not np.isclose(abs(native.GetDirection()[0]), 1):
+            raise ValueError(f'Stored x axis must be left-right: {case}')
+        data = [sitk.GetArrayFromImage(image) for image in (native, mirrored)]
+        if not all(np.isfinite(a).all() and a.min() >= 0 and a.max() <= 80 for a in data):
+            raise ValueError(f'Expected finite, skull-stripped CT clipped to 0-80 HU: {case}')
+        if not np.allclose(data[0][:, :, ::-1], data[1], atol=1e-4, rtol=0):
+            raise ValueError(f'Mirrored CT does not match the atlas-space reflection: {case}')
+        for channel, name in enumerate(('image.nii.gz', 'image_flipped.nii.gz')):
+            shutil.copy2(case/name, images/f'{case.name}_{channel:04d}.nii.gz')
+            # Support comes from the clipped image, never from the lesion label.
+            mask = sitk.GetImageFromArray((data[channel] > 0).astype(np.uint8))
+            mask.CopyInformation(native)
+            sitk.WriteImage(mask, str(images/f'{case.name}_{channel+2:04d}.nii.gz'), True)
+        if (case/label_filename).is_file():
+            shutil.copy2(case/label_filename, labels/f'{case.name}.nii.gz')
+    dataset = dict(channel_names={'0': 'CT', '1': 'CT', '2': 'native_support', '3': 'mirror_support'},
+        labels={'background': 0, 'stroke': 1}, file_ending='.nii.gz', name=dataset_name)
+    if training:
+        dataset['numTraining'] = len(cases)
+    (destination/'dataset.json').write_text(json.dumps(dataset, indent=2)+'\n')
+    print(destination)
+    return destination
 
-# optional second channel
-COPY_FLIPPED_CHANNEL = True
-FLIPPED_IMAGE_NAME = "image_flipped.nii.gz"
 
-# dataset specs
-dataset_name = args.dataset_name
-dataset_dir_name = "Dataset" + "_" + dataset_name
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source', type=Path, required=True)
+    parser.add_argument('--target', type=Path, required=True)
+    parser.add_argument('--dataset-name', required=True)
+    parser.add_argument('--label-filename', default='mask.nii.gz')
+    parser.add_argument('--training', action='store_true')
+    args = parser.parse_args()
+    prepare(args.source, args.target, args.dataset_name, args.training, args.label_filename)
 
-# directory creation
-DATASET_DIR = TARGET_DIR / dataset_dir_name
-imagesVal = DATASET_DIR / "imagesVal"
-labelsVal = DATASET_DIR / "labelsVal"
 
-DATASET_DIR.mkdir(parents=True, exist_ok=True)
-imagesVal.mkdir(parents=True, exist_ok=True)
-labelsVal.mkdir(parents=True, exist_ok=True)
-
-# search for training images and corresponding labels
-case_count = 0
-
-for folder in SOURCE_DIR.rglob("*"):
-    if folder.is_dir():
-        print(f"Searching through {folder}")
-
-        image_raw = folder / "image.nii.gz"
-        image_flipped_raw = folder / FLIPPED_IMAGE_NAME
-        label_raw = folder / args.label_filename
-
-        # check if image and label exist in current folder
-        if image_raw.exists() and label_raw.exists():
-
-            # if second channel is enabled, require flipped image as well
-            if COPY_FLIPPED_CHANNEL and not image_flipped_raw.exists():
-                print(f"Image and label exist, but flipped image is missing in: {folder}")
-                continue
-
-            print(f"Image and corresponding label exist in: {folder}")
-
-            # copy image and label to target directory with changed names
-            caseID = f"{case_count:03}"
-
-            new_filename_image = f"{caseID}_{folder.name}_0000.nii.gz"
-            new_filename_label = f"{caseID}_{folder.name}.nii.gz"
-
-            targetFile_image = imagesVal / new_filename_image
-            targetFile_label = labelsVal / new_filename_label
-
-            shutil.copy2(image_raw, targetFile_image)
-            shutil.copy2(label_raw, targetFile_label)
-
-            # optional second channel: flipped image
-            if COPY_FLIPPED_CHANNEL:
-                new_filename_image_flipped = f"{caseID}_{folder.name}_0001.nii.gz"
-                targetFile_image_flipped = imagesVal / new_filename_image_flipped
-
-                shutil.copy2(image_flipped_raw, targetFile_image_flipped)
-
-            print(f"Case-ID: {caseID}\nFiles copied successfully!")
-            case_count += 1
-
-        else:
-            print(f"No matching files found in: {folder}")
-
-print("Dataset creation finished!")
+if __name__ == '__main__':
+    main()

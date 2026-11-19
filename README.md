@@ -1,108 +1,112 @@
 # Stroke CT segmentation
 
-Code for atlas-aligned, dual-channel nnU-Net segmentation of ischemic lesions on non-contrast CT, including frozen-encoder fine-tuning and probability-threshold selection.
+nnU-Net segmentation of ischemic lesions on non-contrast CT, initialized with nnFoundationCNN. Original and mirrored CT share a ResEncM encoder. Local comparison modules enhance two encoder skip maps; two image-derived support channels exclude invalid comparisons. The pipeline includes source training, selective domain fine-tuning, and evaluation at a fixed probability threshold of 0.5.
 
 ## Requirements
 
-Use Python 3.10.18 with the verified packages in `requirements.txt`, including nnU-Net 2.6.2. Skull stripping also needs TotalSegmentator and its brain weights (see `requirements-skullstripping.txt`). Supply a CT atlas, images and masks, and five baseline fold checkpoints. Set `nnUNet_raw`, `nnUNet_preprocessed`, and `nnUNet_results` in your environment. Private-cohort data, model weights, and nnU-Net plans are not included.
+Use Python 3.10 and a CUDA GPU supporting bfloat16 (the study used 16 GB VRAM). Create a separate environment and install the pinned nnU-Net revision and dependencies:
+
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -r requirements-skullstripping.txt
+export nnUNet_raw=/path/to/nnUNet_raw
+export nnUNet_preprocessed=/path/to/nnUNet_preprocessed
+export nnUNet_results=/path/to/nnUNet_results
+export nnUNet_compile=true
+```
+
+Skull stripping needs TotalSegmentator's brain weights. Supply a CT atlas at 1 × 1 × 3 mm³, CT images, and lesion annotations. Private data and trained study models are not included. Download the encoder checkpoint from the official [nnFoundationCNN repository](https://huggingface.co/MIC-DKFZ/nnFoundationCNN); it is not redistributed here:
+
+```bash
+python -c "from huggingface_hub import hf_hub_download; hf_hub_download('MIC-DKFZ/nnFoundationCNN', 'checkpoint_final.pth', revision='8edba046f01d09771b8204b9d3e7a6c06d6e1adc', local_dir='/path/to/nnfoundation')"
+```
 
 ## Workflow
 
-Run commands from the repository root. The examples use ISLES-like settings and placeholder dataset IDs. Replace them with your own paths and prepared datasets.
+Run commands from the repository root. Replace the example paths and dataset names with your own. Commands refuse to overwrite completed models or populated output directories.
 
 ### 1. Preprocess CTs and masks
 
-The pipeline registers CT and mask to a 1 × 1 × 3 mm³ atlas using an affine transform. It uses linear interpolation for CT and nearest-neighbor interpolation for masks. It then skull-strips with TotalSegmentator, clips CT to 0–80 HU, and creates the mirrored CT channel. Intermediate registrations and transforms remain in `--work`:
+Each source case is a folder containing `image.nii.gz` and, for labeled cohorts, `mask.nii.gz`. The pipeline applies affine atlas registration (linear CT, nearest-neighbor mask interpolation), TotalSegmentator skull stripping, 0–80 HU clipping, and left-right mirroring. Use an atlas whose stored x axis is left-right. Intermediate images and transforms remain in `--work`:
 
 ```bash
-python -m preprocessing.pipeline --source /path/to/cases --work /path/to/work \
-  --output /path/to/preprocessed --atlas /path/to/ncct_skull_3mm.nii.gz
+python -m preprocessing.pipeline --source /path/to/source_cases --work /path/to/work \
+  --output /path/to/source_prepared --atlas /path/to/ncct_skull_3mm.nii.gz
 ```
 
-Each labeled source case needs `image.nii.gz` and `mask.nii.gz`. The work and output directories must be separate and empty. Input spatial headers must be valid. An explicit RPI conversion is not required. Preprocessing defaults to GPU. Add `--device cpu` if needed.
+Source, work, and output folders must be separate; work and output must be empty. Unlabeled inference cohorts are supported. Preprocessing defaults to GPU; use `--device cpu` if needed. Apply the same preprocessing to source, adaptation, and held-out cohorts. Already atlas-aligned data can enter the subsequent individual preprocessing stages directly.
 
-### 2. Prepare nnU-Net data and baseline models
+### 2. Prepare source data and train
 
-Train a five-fold baseline with nnU-Net, or supply its `fold_0`–`fold_4` `checkpoint_best.pth` files. Prepare three target-domain nnU-Net datasets from the preprocessed CT, mirrored CT, and mask. Each dataset needs its own ID, `dataset.json`, and nnU-Net plans, but the same fine-tuning cases with the same case IDs. Do not include held-out test cases.
-
-The split helper reads exact case IDs from a `labelsTr` folder containing **only fine-tuning cases**. It writes five identical folds for each of the three datasets:
+Create four channels: CT, mirrored CT, and their binary support masks (`CT > 0`, without using lesion labels). The supplied plan fixes 1 × 1 × 3 mm³ spacing, a 48 × 160 × 160 voxel patch, batch size 2, and the study's source CT normalization statistics. Both CT channels share CT normalization; support masks are not normalized.
 
 ```bash
-python -m finetuning.prepare_splits --labels /path/to/finetuning_only/labelsTr \
-  --output /path/to/split_files --seed 12345
+python -m inference.prepare_dataset --source /path/to/source_prepared \
+  --target "$nnUNet_raw" --dataset-name Dataset001_Stroke --training
+python -m training.prepare --dataset Dataset001_Stroke
+python -m training.train --dataset Dataset001_Stroke \
+  --foundation /path/to/nnfoundation/checkpoint_final.pth --folds 0 1 2 3 4
+python -m training.train --dataset Dataset001_Stroke \
+  --foundation /path/to/nnfoundation/checkpoint_final.pth --folds all
 ```
 
-| Example dataset | Generated split | Train cases per fold | Validation cases per fold |
-|---|---|---|---|
-| Calibration A (124) | `calibration_a/splits_final.json` | Half A | Half B |
-| Calibration B (125) | `calibration_b/splits_final.json` | Half B | Half A |
-| Final model (126) | `final/splits_final.json` | All fine-tuning cases | The same fine-tuning cases |
+For fixed internal splits, place the nnU-Net `splits_final.json` in the preprocessed dataset folder before training. Otherwise nnU-Net generates five folds. CV folds are validated after training; `fold_all` fits one model on the entire source cohort for external use. Source training uses 100 epochs × 250 updates, AdamW, encoder LR 1e-4 and decoder/comparison LR 1e-3, with 38 warmup epochs followed by polynomial decay. The official nnU-Net dynamic transfer adapts pretrained kernels to the anisotropic plan.
 
-Place each file in the matching prepared dataset's nnU-Net preprocessed directory. To reproduce a fixed calibration split, supply `--calibration-a-cases` with one exact case ID per line instead of `--seed`. The helper only writes split files. It does not copy images or generate plans.
+Models are saved under `$nnUNet_results/Dataset001_Stroke/nnUNetTrainerSymmetryComparison__SymmetryResEncMPlans__3d_fullres/fold_{0–4,all}/checkpoint_final.pth`. Add `--resume` to continue an interrupted fold from `checkpoint_latest.pth`. The custom trainer runs directly from this repository; no installed nnU-Net files are edited.
 
-### 3. Fine-tune calibration models and select a threshold
+### 3. Select fine-tuning duration
 
-Install the frozen-encoder trainer into your nnU-Net 2.6.2 environment once. The calibration command fine-tunes five folds on each dataset, averages their predictions on the excluded validation half, then combines both halves to select the threshold with the highest mean Dice. Use the shared fine-tuning images and labels for `--images` and `--labels`:
+Prepare a separate dataset containing **only adaptation cases**, using the same source normalization and geometry. In the commands below, `BASELINE` is the source `fold_all/checkpoint_final.pth` path:
 
 ```bash
-python -m nnunet_extension.install_trainer
-python -m finetuning.threshold_search --dataset-a 124 --dataset-b 125 \
-  --images /path/to/finetuning_only/imagesTr \
-  --labels /path/to/finetuning_only/labelsTr \
-  --pretrained-model /path/to/baseline_model --output /path/to/calibration \
-  --epochs 30 --train-iterations 60 --learning-rate 0.001
+export BASELINE=/path/to/source_model/fold_all/checkpoint_final.pth
+python -m inference.prepare_dataset --source /path/to/adaptation_prepared \
+  --target "$nnUNet_raw" --dataset-name Dataset002_Target --training
+python -m training.prepare --dataset Dataset002_Target --source-checkpoint "$BASELINE"
+python -m finetuning.prepare_splits --labels "$nnUNet_raw/Dataset002_Target/labelsTr" \
+  --output "$nnUNet_preprocessed/Dataset002_Target/splits_final.json" --seed 12345
+python -m finetuning.select_duration --dataset Dataset002_Target \
+  --source-checkpoint "$BASELINE" --output /path/to/duration_cv --epochs 5 10 15 20
 ```
 
-The study used 10 fine-tuning epochs for Boston and 30 for ISLES, with 60 training iterations per epoch and a learning rate of 0.001. Set these through the command arguments for your cohort. The default threshold grid is 0.50, 0.40, 0.30, 0.20, then 0.10–0.01 in 0.01 steps. Results are saved as `threshold_evaluation.csv` beneath `--output`. The study selected 0.05 for Boston and 0.03 for ISLES. The ISLES fine-tuning/test split is provided in `splits/isles2024_finetune_test.json` for reference. The code does not enforce it.
+Two complementary folds each start from the same source model. Candidate snapshots share the same constant learning rates, so one training trajectory per fold supplies all durations. Selection uses pooled out-of-fold median Dice; ties favor shorter adaptation. Per-case scores, duration summaries, predictions, and checkpoints are saved under `--output`. Change the duration grid for the target domain. To reuse a fixed split, supply `--calibration-a-cases /path/to/case_ids.txt` instead of `--seed`.
 
-### 4. Fine-tune the final model
-
-Fine-tune five folds on the final dataset, using all fine-tuning cases for training in every fold. Each fold starts from its corresponding baseline `checkpoint_best.pth`. The encoder stays frozen while the remaining weights are fine-tuned:
+### 4. Fine-tune on all adaptation cases
 
 ```bash
-python -m finetuning.train --dataset 126 \
-  --pretrained-model /path/to/baseline_model --epochs 30 \
-  --train-iterations 60 --learning-rate 0.001
+python -m finetuning.train --dataset Dataset002_Target \
+  --source-checkpoint "$BASELINE" --epochs 10
 ```
 
-The final split lists the fine-tuning cases for validation too. It contains no test cases and is not used to choose a checkpoint. Use the resulting `checkpoint_final.pth` files for held-out prediction.
+The study settings are 10 epochs for Boston and 40 for ISLES, with 20 updates per epoch. Only comparison modules, the final decoder stage/segmentation head (LR 1e-3), and early encoder normalization affine parameters (LR 5e-4) adapt; all other parameters remain frozen. Set durations, iterations, or LRs through the corresponding command options. The final checkpoint is saved under `$nnUNet_results/Dataset002_Target/nnUNetTrainerSymmetryFineTuning__SymmetryResEncMPlans__3d_fullres/fold_all/`. Validation on this all-case refit is not used for checkpoint selection. Held-out test cases must remain outside this dataset.
 
-### 5. Predict held-out cases
+The ISLES adaptation/test case lists are in `splits/isles2024_finetune_test.json`; dataset preparation does not automatically apply this listing.
 
-For a labeled evaluation cohort, copy the preprocessed channels into the nnU-Net inference layout, then predict with the fine-tuned model. Inference averages five folds from `checkpoint_final.pth` and saves probability maps:
+### 5. Predict and evaluate
+
+Prepare held-out CTs using step 1, create inference channels, and predict with either the source or adapted checkpoint:
 
 ```bash
-python -m inference.prepare_dataset --source /path/to/heldout_preprocessed \
-  --target /path/to/nnunet_inputs --dataset-name Study --label-filename mask.nii.gz
-python -m inference.nnunet_predict --dataset 126 \
-  --input /path/to/nnunet_inputs/Dataset_Study/imagesVal \
-  --output /path/to/predictions --trainer nnUNetTrainer_freeze_configurable
+python -m inference.prepare_dataset --source /path/to/heldout_prepared \
+  --target /path/to/inference_inputs --dataset-name Heldout
+python -m inference.nnunet_predict --checkpoint /path/to/model/checkpoint_final.pth \
+  --input /path/to/inference_inputs/Heldout/imagesVal --output /path/to/predictions
+python -m evaluation.full_evaluation --predictions /path/to/predictions \
+  --labels /path/to/inference_inputs/Heldout/labelsVal --output /path/to/metrics
 ```
 
-Inference defaults to GPU. Add `--device cpu` if needed. The copied labels are for evaluation, not prediction.
+Inference uses Gaussian sliding-window averaging and mirror augmentation with one final model. Binary output uses probability 0.5, without threshold optimization or connected-component filtering. Add `--save-probabilities` to retain probabilities, or `--device cpu` for CPU inference. Evaluation saves per-case CSV and summary JSON, including Dice, IQR, LDR (Dice > 0), the study's mAP definition (case fraction with IoU > 0.35355), and HD95. Prediction and reference folders must contain the same cases and grids.
 
-### 6. Apply the threshold and evaluate
+NWU is downstream of segmentation: map masks back to native space and calculate it on native, unclipped CT using [aNWU](https://github.com/IPMI-ICNS-UKE/aNWU), including its connected-component handling.
 
-Apply the threshold chosen on the fine-tuning cohort, then evaluate the resulting masks separately:
+## Code and citation
 
-```bash
-python -m postprocessing.thresholding \
-  --probabilities /path/to/predictions/nnUNetTrainer_freeze_configurable_3d_fullres \
-  --output /path/to/masks --threshold 0.03
-python -m evaluation.full_evaluation --predictions /path/to/masks \
-  --labels /path/to/nnunet_inputs/Dataset_Study/labelsVal
-```
+`nnunet_extension/model.py` contains the comparison modules and shared encoder; `augmentation.py` keeps CT intensity augmentation paired and support masks intact. `trainer.py` and `optimizers.py` define source training and selective adaptation. The remaining folders follow the workflow above.
 
-NWU is downstream of segmentation: map masks back to native space and calculate it on native, unclipped CT using the method in [Sentker et al.'s aNWU repository](https://github.com/IPMI-ICNS-UKE/aNWU).
-
-## Repository layout
-
-The folders follow the workflow. `preprocessing/` holds the ordered pipeline and its individual stages. `nnunet_extension/` and `finetuning/` hold the trainer and threshold search. `inference/`, `postprocessing/`, and `evaluation/` cover final prediction and scoring. The ISLES split in `splits/` is provided for reference.
-
-## Citation
-
-If you use the segmentation workflow, cite the associated stroke CT segmentation paper. For NWU computation, cite [Sentker et al., *European Radiology* (2025)](https://doi.org/10.1007/s00330-025-12238-0) and refer to [aNWU](https://github.com/IPMI-ICNS-UKE/aNWU).
+Cite the associated stroke CT segmentation paper when using this pipeline, alongside [nnU-Net](https://github.com/MIC-DKFZ/nnUNet) and [nnFoundation](https://github.com/MIC-DKFZ/nnssl). For NWU, cite [Sentker et al., *European Radiology* (2025)](https://doi.org/10.1007/s00330-025-12238-0).
 
 ## License
 
-Repository code, documentation, and split listing use [CC BY-NC 4.0](LICENSE), matching aNWU. nnU-Net is an external dependency under its own license. External data and weights are not covered.
+Repository code, documentation, and split listing use [CC BY-NC 4.0](LICENSE), matching aNWU. External software, data, and nnFoundation weights retain their own licenses.

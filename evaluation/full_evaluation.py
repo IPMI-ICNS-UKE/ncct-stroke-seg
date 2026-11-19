@@ -1,6 +1,8 @@
 """Compute the recorded segmentation metrics against reference masks."""
 
 import argparse
+import csv
+import json
 import SimpleITK as sitk
 from pathlib import Path
 import numpy as np
@@ -44,95 +46,49 @@ def calculate_hd95(pred_img: sitk.Image, gt_img: sitk.Image) -> float:
     return max(hd95_a, hd95_b)
 
 
-def full_evaluation(SOURCE_DIR: Path, GT_DIR: Path):
-    print(f"Starting evaluation for predictions in {SOURCE_DIR} using ground truth in {GT_DIR}")
+def full_evaluation(SOURCE_DIR: Path, GT_DIR: Path, output: Path | None = None):
+    predictions = {p.name for p in SOURCE_DIR.glob('*.nii.gz')}
+    labels = {p.name for p in GT_DIR.glob('*.nii.gz')}
+    if not predictions or predictions != labels:
+        raise ValueError('Prediction and reference folders must contain the same nonempty case set')
+    rows = []
+    for name in sorted(predictions):
+        pred_img, gt_img = sitk.ReadImage(str(SOURCE_DIR/name)), sitk.ReadImage(str(GT_DIR/name))
+        if pred_img.GetSize() != gt_img.GetSize() or any(not np.allclose(a, b) for a, b in [
+                (pred_img.GetSpacing(), gt_img.GetSpacing()), (pred_img.GetOrigin(), gt_img.GetOrigin()),
+                (pred_img.GetDirection(), gt_img.GetDirection())]):
+            raise ValueError(f'Prediction/reference grids differ: {name}')
+        pred = sitk.GetArrayFromImage(pred_img) > 0
+        gt = sitk.GetArrayFromImage(gt_img) > 0
+        overlap, union = (pred & gt).sum(), (pred | gt).sum()
+        # Match the original study definitions, including Dice=0 for empty references.
+        dice = float(2*overlap/(pred.sum()+gt.sum())) if gt.any() else 0.
+        rows.append(dict(case=name.removesuffix('.nii.gz'), dice=dice,
+            iou=float(overlap/union) if union else 0., false_positive_voxels=int((pred & ~gt).sum()),
+            hd95_mm=calculate_hd95(pred_img, gt_img)))
+    dice = np.array([r['dice'] for r in rows])
+    q1, median, q3 = np.quantile(dice, [.25, .5, .75])
+    hd95 = [r['hd95_mm'] for r in rows if np.isfinite(r['hd95_mm'])]
+    summary = dict(n=len(rows), mean_dice=float(dice.mean()), sd_dice=float(dice.std()),
+        median_dice=float(median), dice_q25=float(q1), dice_q75=float(q3),
+        LDR=float((dice > 0).mean()), mAP=float(np.mean([r['iou'] > .35355 for r in rows])),
+        mean_false_positive_voxels=float(np.mean([r['false_positive_voxels'] for r in rows])),
+        n_finite_hd95=len(hd95), mean_hd95_mm=float(np.mean(hd95)) if hd95 else None,
+        median_hd95_mm=float(np.median(hd95)) if hd95 else None)
+    if output is not None:
+        output.mkdir(parents=True, exist_ok=False)
+        with (output/'cases.csv').open('w', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+            writer.writeheader(); writer.writerows(rows)
+        (output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
+    print(json.dumps(summary, indent=2))
+    return summary
 
-    dice_scores = []
-    iou_scores = []
-    FP_scores = []
-    hd95_scores = []
 
-    for prediction_file in SOURCE_DIR.iterdir():
-        if prediction_file.suffix == ".gz":
-            print(f"Found prediction {prediction_file}")
-
-            gt_file = GT_DIR / prediction_file.name
-            if not gt_file.exists():
-                print(f"  -> No matching GT file found for {prediction_file.name} in {GT_DIR}, skipping.")
-                continue
-
-            # read prediction and ground truth
-            pred_img = sitk.ReadImage(prediction_file)
-            gt_img = sitk.ReadImage(gt_file)
-
-            # convert to numpy arrays
-            pred = sitk.GetArrayFromImage(pred_img)
-            gt = sitk.GetArrayFromImage(gt_img)
-
-            if pred.shape != gt.shape:
-                print(f"  -> Shape mismatch for {prediction_file.name}: pred {pred.shape}, gt {gt.shape}, skipping.")
-                continue
-
-            # calculate metrics
-            overlap = np.logical_and(pred, gt).sum()
-            dice_score = 2 * overlap / (gt.sum() + pred.sum()) if gt.sum() else 0
-            dice_scores.append(dice_score)
-
-            union = np.logical_or(pred, gt).sum()
-            iou_score = overlap / union if union > 0 else 0.0
-            iou_scores.append(iou_score)
-
-            false_positives = np.sum(~(gt.astype(bool)) & pred)
-            FP_scores.append(false_positives)
-
-            hd95 = calculate_hd95(pred_img, gt_img)
-            hd95_scores.append(hd95)
-
-            print(f"  -> DICE for {prediction_file.name}: {dice_score:.4f}")
-            print(f"  -> IoU for {prediction_file.name}: {iou_score:.4f}")
-            print(f"  -> HD95 for {prediction_file.name}: {hd95:.2f}")
-
-    if len(dice_scores) == 0:
-        print("No DICE scores were computed (no matching .gz files).")
-        return None
-
-    mean_dice = float(np.mean(dice_scores))
-    sd = float(np.std(dice_scores))
-
-    median_dice = float(np.median(dice_scores))
-    q1 = np.percentile(dice_scores, 25)
-    q3 = np.percentile(dice_scores, 75)
-
-    #calculate mAP (mean Average Precision)
-    threshold_map = 0.35355
-    count_above = sum(1 for iou in iou_scores if iou > threshold_map)
-    mAP = count_above / len(iou_scores)
-
-    #calculate HD_accuracy
-    count_above = sum(1 for dice in dice_scores if dice > 0)
-    HD_accuracy = count_above / len(dice_scores)
-
-    #mean fps
-    mean_FP = float(np.mean(FP_scores))
-
-    #valid hd95 values
-    finite_hd95 = [h for h in hd95_scores if np.isfinite(h)]
-
-    print(f"\nDICE computation finished.")
-    print(f"Number of evaluated cases: {len(dice_scores)}")
-    print(f"Mean DICE: {mean_dice:.4f} +- {sd:.4f}")
-    print(f"Median DICE: {median_dice:.4f} [{q1:.4f};{q3:.4f}]")
-    print(f"mAP: {mAP:.4f}")
-    print(f"HD_accuracy: {HD_accuracy:.4f}")
-    print(f"Mean FP: {mean_FP:.4f}")
-    print(f"Mean HD95 (finite only): {float(np.mean(finite_hd95)) if finite_hd95 else float('nan'):.2f}")
-    print(f"Median HD95 (finite only): {float(np.median(finite_hd95)) if finite_hd95 else float('nan'):.2f}")
-
-    return mean_dice, median_dice, HD_accuracy, mean_FP, mAP
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Compute the recorded segmentation metrics.")
-    parser.add_argument("--predictions", type=Path, required=True)
-    parser.add_argument("--labels", type=Path, required=True)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Compute the recorded segmentation metrics.')
+    parser.add_argument('--predictions', type=Path, required=True)
+    parser.add_argument('--labels', type=Path, required=True)
+    parser.add_argument('--output', type=Path, help='New directory for per-case CSV and summary JSON')
     args = parser.parse_args()
-    full_evaluation(SOURCE_DIR=args.predictions, GT_DIR=args.labels)
+    full_evaluation(args.predictions, args.labels, args.output)
