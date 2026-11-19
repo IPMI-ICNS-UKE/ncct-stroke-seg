@@ -107,4 +107,4 @@ Cite the associated stroke CT segmentation paper when using this pipeline, along
 
 ## License
 
-Repository code, documentation, and split listing use [CC BY-NC 4.0](LICENSE), matching aNWU. External software, data, and nnFoundation weights retain their own licenses.
+Repository code, documentation, and split listing use [CC BY-NC 4.0](LICENSE). External software, data, and nnFoundation weights retain their own licenses.
