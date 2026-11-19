@@ -46,10 +46,10 @@ Use separate source, work, and output folders, with work and output initially em
 
 ### 2. Prepare source data and train
 
-Dataset preparation creates CT, mirrored CT, and two binary support channels (`CT > 0`). The supplied plan uses 1 × 1 × 3 mm³ spacing, a 48 × 160 × 160 voxel patch, batch size 2, and fixed source CT normalization statistics shared by both CT channels. Support masks remain unnormalized.
+`preprocessing.prepare_dataset` arranges the CT pair and generates two binary support channels (`CT > 0`). With `--training`, it creates the nnU-Net `imagesTr`/`labelsTr` layout. The following `training.prepare` command applies nnU-Net preprocessing. The supplied plan uses 1 × 1 × 3 mm³ spacing, a 48 × 160 × 160 voxel patch, batch size 2, and fixed source CT normalization statistics shared by both CT channels. Support masks remain unnormalized.
 
 ```bash
-python -m inference.prepare_dataset --source /path/to/source_prepared \
+python -m preprocessing.prepare_dataset --source /path/to/source_prepared \
   --target "$nnUNet_raw" --dataset-name Dataset001_Stroke --training
 python -m training.prepare --dataset Dataset001_Stroke
 python -m training.train --dataset Dataset001_Stroke \
@@ -68,7 +68,7 @@ Prepare a dataset containing **only labeled adaptation cases**. `BASELINE` point
 
 ```bash
 export BASELINE=/path/to/source_model/fold_all/checkpoint_final.pth
-python -m inference.prepare_dataset --source /path/to/adaptation_prepared \
+python -m preprocessing.prepare_dataset --source /path/to/adaptation_prepared \
   --target "$nnUNet_raw" --dataset-name Dataset002_Target --training
 python -m training.prepare --dataset Dataset002_Target --source-checkpoint "$BASELINE"
 python -m finetuning.train --dataset Dataset002_Target \
@@ -84,10 +84,10 @@ Keep held-out cases separate. The ISLES adaptation/test lists are provided in `s
 
 ### 4. Predict and evaluate
 
-Preprocess held-out CTs as in step 1, then predict with the source or adapted checkpoint:
+Preprocess held-out CTs as in step 1. Dataset preparation without `--training` creates `imagesVal` and optional `labelsVal` for prediction and evaluation. Then predict with the source or adapted checkpoint:
 
 ```bash
-python -m inference.prepare_dataset --source /path/to/heldout_prepared \
+python -m preprocessing.prepare_dataset --source /path/to/heldout_prepared \
   --target /path/to/inference_inputs --dataset-name Heldout
 python -m inference.nnunet_predict --checkpoint /path/to/model/checkpoint_final.pth \
   --input /path/to/inference_inputs/Heldout/imagesVal --output /path/to/predictions
